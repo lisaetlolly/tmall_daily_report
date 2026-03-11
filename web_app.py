@@ -16,7 +16,7 @@ HISTORY_FILE = 'dashboard_history.csv'
 CONFIG_FILE = 'app_config.json'
 
 # ==========================================
-# 配置记忆系统 (读取与保存)
+# 配置记忆系统
 # ==========================================
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -33,7 +33,7 @@ def save_config(config_data):
 config = load_config()
 
 # ==========================================
-# 侧边栏：业务参数配置中心 (带记忆)
+# 侧边栏：业务参数配置中心
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 业务参数配置中心")
@@ -78,13 +78,21 @@ def parse_money(s):
     try: return float(str(s).replace('¥','').replace(',','').replace('%','').replace('元','').strip())
     except: return 0.0
 
+# 🔥 核心升级 2.0：暴力清洗 ID，确保映射表 100% 命中！
+def clean_id(raw_id):
+    if pd.isna(raw_id): return ""
+    # 转字符串，去掉所有的空格，去掉小数点和后面的 0
+    return str(raw_id).strip().replace(' ', '').split('.')[0]
+
 def get_category_by_mapping(item_id, title, mapping_dict):
-    if mapping_dict and str(item_id) in mapping_dict:
-        cat_cn = str(mapping_dict[str(item_id)]).strip()
+    c_id = clean_id(item_id)
+    if mapping_dict and c_id in mapping_dict:
+        cat_cn = str(mapping_dict[c_id]).strip()
         if '灯' in cat_cn: return 'Lighting'
         if '家具' in cat_cn: return 'Furniture'
         return 'ACC' 
     
+    # 兜底逻辑
     t = str(title).lower()
     if any(x in t for x in['灯', 'light', 'lamp', 'portable', 'shade', 'pendant', 'bulb', 'sconce', 'apex']): return 'Lighting'
     if any(x in t for x in['沙发', '柜', '床', 'sofa', 'cabinet', 'cabine', 'bed', 'desk', 'chair', '椅']): return 'Furniture'
@@ -185,7 +193,7 @@ with col1:
     file_ly = st.file_uploader("4. 🕰️ 去年当日单品", type=['xlsx', 'xls', 'csv'])
 with col2: 
     file_item = st.file_uploader("2. 📥 今日单品生参", type=['xlsx', 'xls', 'csv'])
-    file_mapping = st.file_uploader("5. 🏷️ 商品分类映射表", type=['xlsx', 'xls', 'csv'])
+    file_mapping = st.file_uploader("5. 🏷️ 商品分类映射表 (解决品类分歧)", type=['xlsx', 'xls', 'csv'])
 with col3: 
     file_store = st.file_uploader("3. 📥 店铺大盘表", type=['xlsx', 'xls', 'csv'])
     file_history = st.file_uploader("6. 💾 历史记录表(选传)", type=['csv'])
@@ -217,7 +225,7 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
             MONTH_NAME = d.strftime('%b') 
             WEEK_NUM = d.isocalendar()[1] 
 
-            # --- 解析分类映射表 ---
+            # --- 解析分类映射表 (MDM) ---
             id_to_cat = {}
             if file_mapping:
                 mapping_df = read_excel_smart(file_mapping, '一级')
@@ -225,9 +233,10 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
                     mapping_df = read_excel_smart(file_mapping, '商品ID')
                 
                 if mapping_df is not None and '商品ID' in mapping_df.columns and '一级' in mapping_df.columns:
-                    mapping_df['商品ID'] = mapping_df['商品ID'].astype(str).str.replace(r'\.0$', '', regex=True)
-                    id_to_cat = dict(zip(mapping_df['商品ID'], mapping_df['一级']))
-                    st.success(f"🏷️ 成功加载商品主数据映射表！共载入 {len(id_to_cat)} 条精准分类规则。")
+                    # 暴力清洗映射表里的 ID
+                    mapping_df['Clean_ID'] = mapping_df['商品ID'].apply(clean_id)
+                    id_to_cat = dict(zip(mapping_df['Clean_ID'], mapping_df['一级']))
+                    st.success(f"🏷️ 成功加载商品主数据映射表！共载入 {len(id_to_cat)} 条分类规则。")
 
             # --- 安全读取底层数据 ---
             orders = read_excel_smart(file_order, '商品标题')
@@ -256,18 +265,14 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
 
             LY_STORE_GMV = get_col_val(sycm_store,['去年今日GMV', '去年当日GMV'])
             LY_STORE_TRAFFIC = get_col_val(sycm_store,['去年今日访客', '去年当日访客'])
-            LY_STORE_BUYERS = get_col_val(sycm_store, ['去年今日买家', '去年当日买家'])
+            LY_STORE_BUYERS = get_col_val(sycm_store,['去年今日买家', '去年当日买家'])
             LY_STORE_UNITS = get_col_val(sycm_store,['去年今日件数', '去年当日件数'])
             LY_STORE_REFUND = get_col_val(sycm_store,['去年今日退款', '去年当日退款'])
             LY_STORE_DEMAND = get_col_val(sycm_store,['去年今日下单金额'])
 
             # ==============================================================
-            # 🔥 绝对防弹：初始化所有目标和预估变量 (防止报错)
-            # ==============================================================
-            PLAN_TARGET_GMV_MONTH, PLAN_TARGET_NET_MONTH = None, None
-            PLAN_TARGET_GMV_MTD, PLAN_TARGET_NET_MTD = None, None
-            
             # 融合最终 Target (侧边栏为准)
+            # ==============================================================
             TARGET_GMV_MONTH = tgt_gmv_month
             TARGET_NET_MONTH = tgt_net_month
             TARGET_GMV_MTD = tgt_gmv_mtd
@@ -281,7 +286,6 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
 
             # --- 提取去年单品同比 ---
             if ly_sycm is not None and not ly_sycm.empty:
-                ly_sycm['商品ID'] = ly_sycm.get('商品ID', pd.Series([])).astype(str).str.replace(r'\.0$', '', regex=True)
                 ly_sycm['Category'] = ly_sycm.apply(lambda x: get_category_by_mapping(x.get('商品ID'), x.get('商品名称'), id_to_cat), axis=1)
                 
                 ly_item_gmv = ly_sycm['支付金额'].apply(parse_money).sum()
@@ -327,7 +331,6 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
             # ==========================================
             # Part 2: Categories MTD
             # ==========================================
-            sycm_item['商品ID'] = sycm_item.get('商品ID', pd.Series([])).astype(str).str.replace(r'\.0$', '', regex=True)
             sycm_item['Category'] = sycm_item.apply(lambda x: get_category_by_mapping(x.get('商品ID'), x.get('商品名称'), id_to_cat), axis=1)
             
             sycm_item['月累计金额'] = sycm_item['月累计支付金额'].apply(parse_money)
@@ -340,7 +343,6 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
                 MTD_Units=('月累计件数', 'sum')
             ).reset_index()
             
-            # 🔥 修复：强制切分品类目标，防止未定义报错
             TARGET_LIGHTING_MTD = TARGET_GMV_MTD * 0.10 if TARGET_GMV_MTD else None
             TARGET_FURNITURE_MTD = TARGET_GMV_MTD * 0.35 if TARGET_GMV_MTD else None
             TARGET_ACC_MTD = TARGET_GMV_MTD * 0.55 if TARGET_GMV_MTD else None
@@ -499,43 +501,21 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
             # ==========================================
             # Part 5: Top 15
             # ==========================================
-            orders['商品ID'] = orders['商品ID'].astype(str).str.replace(r'\.0$', '', regex=True)
-
-            def extract_spu(title):
-                if pd.isna(title): return ''
-                match = re.findall(r'[A-Za-z][A-Za-z0-9\s\-_/]{3,}', str(title))
-                if match:
-                    longest = max([m.strip() for m in match if m.strip()], key=len)
-                    cleaned = re.sub(r'\bHAY\b', '', longest, flags=re.IGNORECASE).strip()
-                    return cleaned if cleaned else str(title)
-                return str(title)
-            orders['Description'] = orders['商品标题'].apply(extract_spu)
-
-            def join_unique(x):
-                return '\n'.join(sorted(set([str(i).strip() for i in x if pd.notna(i) and str(i).strip() != 'nan'])))
-            def clean_color(text):
-                if pd.isna(text): return ''
-                s = str(text).replace('：', ':').replace('；', ';')
-                parts = s.split(';')
-                cleaned =[p.split(':', 1)[1].strip() if ':' in p else p.strip() for p in parts if p.strip()]
-                return ' '.join(cleaned)
-            orders['商品属性'] = orders['商品属性'].apply(clean_color)
-
+            orders['Description'] = orders['商品标题'].apply(lambda x: re.sub(r'\bHAY\b', '', max([m.strip() for m in re.findall(r'[A-Za-z][A-Za-z0-9\s\-_/]{3,}', str(x))] or ['']), flags=re.IGNORECASE).strip() if pd.notna(x) else '')
+            orders['商品属性'] = orders['商品属性'].apply(lambda x: ' '.join([p.split(':', 1)[1].strip() if ':' in p else p.strip() for p in str(x).replace('：', ':').replace('；', ';').split(';') if p.strip()]) if pd.notna(x) else '')
             orders['Category'] = orders.apply(lambda x: get_category_by_mapping(x.get('商品ID'), x.get('商品标题'), id_to_cat), axis=1)
 
             bestsellers = orders.groupby('商品ID').agg(
                 Order_Gross_Sales=('买家实付金额', 'sum'),
                 Units=('购买数量', 'sum'),
-                SKU=('商家编码', join_unique),
-                Colour=('商品属性', join_unique),
+                SKU=('商家编码', lambda x: '\n'.join(sorted(set([str(i).strip() for i in x if pd.notna(i) and str(i).strip() != 'nan'])))),
+                Colour=('商品属性', lambda x: '\n'.join(sorted(set([str(i).strip() for i in x if pd.notna(i) and str(i).strip() != 'nan'])))),
                 Description=('Description', 'first')
             ).reset_index()
 
             if not sycm_item.empty and sycm_item['当日金额'].sum() > 0:
-                sycm_item['商品ID'] = sycm_item['商品ID'].astype(str).str.replace(r'\.0$', '', regex=True)
                 sycm_item_gmv = sycm_item.groupby('商品ID')['当日金额'].sum().reset_index()
                 sycm_item_gmv.rename(columns={'当日金额': 'SYCM_GMV'}, inplace=True)
-
                 bestsellers = pd.merge(bestsellers, sycm_item_gmv, on='商品ID', how='left')
                 bestsellers['Gross_Sales'] = bestsellers['SYCM_GMV'].fillna(0)
             else:
