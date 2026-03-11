@@ -624,4 +624,46 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
                             elif 'vs Y25' in col_name or 'vs LY' in col_name:
                                 worksheet.write(start_row + 2 + r_idx, c_idx, float(val), fmt_pct_int) 
                             elif 'CR' in metric_name:
-                                worksheet.write(start_row + 2 + r_idx, c_idx, val, fmt_pct_cr
+                                worksheet.write(start_row + 2 + r_idx, c_idx, val, fmt_pct_cr) 
+                            elif '%' in metric_name or '%' in col_name:
+                                worksheet.write(start_row + 2 + r_idx, c_idx, val, fmt_pct_int) 
+                            elif 'UPT' in metric_name:
+                                worksheet.write(start_row + 2 + r_idx, c_idx, val, fmt_float) 
+                            elif isinstance(val, (int, float)):
+                                worksheet.write(start_row + 2 + r_idx, c_idx, val, fmt_num)
+                            else:
+                                worksheet.write(start_row + 2 + r_idx, c_idx, val, fmt_text)
+                    return start_row + len(df) + 3
+
+                current_row = write_block("Tmall Store Sales performance- MTD", df_p1, current_row)
+                current_row = write_block("Tmall Store Sales by categories - MTD", df_p2, current_row)
+                current_row = write_block("Tmall Store Followers performance", df_p3, current_row)
+                current_row = write_block(f"Tmall Store Week {WEEK_NUM} Daily Dashboard", df_p4, current_row)
+                current_row = write_block("Tmall Store Bestsellers - Daily", df_p5, current_row)
+
+                worksheet.set_column('A:A', 25)
+                worksheet.set_column('B:D', 20)
+                worksheet.set_column('E:Z', 15)
+
+            st.success("🎉 数据处理完成！")
+            
+            dl_col1, dl_col2 = st.columns(2)
+            with dl_col1:
+                st.download_button(
+                    label="📊 1. 下载电商日报 (Excel)",
+                    data=output_excel.getvalue(),
+                    file_name=f"Tmall_Daily_Dashboard_{DATE_STR.replace('/','')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
+            with dl_col2:
+                history_csv = history_df.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="💾 2. 下载历史库 (明后天上传用)",
+                    data=history_csv,
+                    file_name=f"dashboard_history.csv",
+                    mime="text/csv"
+                )
+
+        except Exception as e:
+            st.error(f"❌ 程序发生错误: {e}")
