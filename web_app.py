@@ -78,16 +78,13 @@ def parse_money(s):
     try: return float(str(s).replace('¥','').replace(',','').replace('%','').replace('元','').strip())
     except: return 0.0
 
-# 🔥 核心加回：基于商品ID映射表的精准分类逻辑
 def get_category_by_mapping(item_id, title, mapping_dict):
-    # 1. 优先使用 ID 映射表
     if mapping_dict and str(item_id) in mapping_dict:
         cat_cn = str(mapping_dict[str(item_id)]).strip()
         if '灯' in cat_cn: return 'Lighting'
         if '家具' in cat_cn: return 'Furniture'
-        return 'ACC' # 配饰、购物金等全归入 ACC
+        return 'ACC' 
     
-    # 2. 如果是新品不在表里，使用 AI 关键词智能兜底
     t = str(title).lower()
     if any(x in t for x in['灯', 'light', 'lamp', 'portable', 'shade', 'pendant', 'bulb', 'sconce', 'apex']): return 'Lighting'
     if any(x in t for x in['沙发', '柜', '床', 'sofa', 'cabinet', 'cabine', 'bed', 'desk', 'chair', '椅']): return 'Furniture'
@@ -179,22 +176,19 @@ def calc_achi(actual, target):
     return actual / target
 
 # ==========================================
-# 主界面：文件上传区 (加回分类映射表！)
+# 主界面：文件上传区
 # ==========================================
-st.title("📊 Tmall Store Daily Dashboard")
-st.markdown("👈 **请先在左侧边栏确认业务参数！** 然后在下方上传表格。")
-
+st.markdown("### 🗂️ 请上传数据源")
 col1, col2, col3 = st.columns(3)
 with col1: 
     file_order = st.file_uploader("1. 📥 今日订单底表", type=['xlsx', 'xls', 'csv'])
-    file_mapping = st.file_uploader("4. 🏷️ 商品分类映射表 (解决品类分歧)", type=['xlsx', 'xls', 'csv'])
-    file_history = st.file_uploader("7. 💾 历史记录表(选传)", type=['csv'])
+    file_ly = st.file_uploader("4. 🕰️ 去年当日单品", type=['xlsx', 'xls', 'csv'])
 with col2: 
     file_item = st.file_uploader("2. 📥 今日单品生参", type=['xlsx', 'xls', 'csv'])
-    file_target = st.file_uploader("5. 🎯 月度规划表(选传)", type=['xlsx', 'xls', 'csv'])
+    file_mapping = st.file_uploader("5. 🏷️ 商品分类映射表", type=['xlsx', 'xls', 'csv'])
 with col3: 
-    file_store = st.file_uploader("3. 📥 店铺大盘表 (你那15列的表)", type=['xlsx', 'xls', 'csv'])
-    file_ly = st.file_uploader("6. 🕰️ 去年当日单品(选传)", type=['xlsx', 'xls', 'csv'])
+    file_store = st.file_uploader("3. 📥 店铺大盘表", type=['xlsx', 'xls', 'csv'])
+    file_history = st.file_uploader("6. 💾 历史记录表(选传)", type=['csv'])
 
 st.divider()
 
@@ -223,7 +217,7 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
             MONTH_NAME = d.strftime('%b') 
             WEEK_NUM = d.isocalendar()[1] 
 
-            # --- 解析分类映射表 (MDM) ---
+            # --- 解析分类映射表 ---
             id_to_cat = {}
             if file_mapping:
                 mapping_df = read_excel_smart(file_mapping, '一级')
@@ -262,63 +256,28 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
 
             LY_STORE_GMV = get_col_val(sycm_store,['去年今日GMV', '去年当日GMV'])
             LY_STORE_TRAFFIC = get_col_val(sycm_store,['去年今日访客', '去年当日访客'])
-            LY_STORE_BUYERS = get_col_val(sycm_store,['去年今日买家', '去年当日买家'])
+            LY_STORE_BUYERS = get_col_val(sycm_store, ['去年今日买家', '去年当日买家'])
             LY_STORE_UNITS = get_col_val(sycm_store,['去年今日件数', '去年当日件数'])
             LY_STORE_REFUND = get_col_val(sycm_store,['去年今日退款', '去年当日退款'])
             LY_STORE_DEMAND = get_col_val(sycm_store,['去年今日下单金额'])
 
             # ==============================================================
-            # 解析《月度目标规划表》
+            # 🔥 绝对防弹：初始化所有目标和预估变量 (防止报错)
             # ==============================================================
             PLAN_TARGET_GMV_MONTH, PLAN_TARGET_NET_MONTH = None, None
             PLAN_TARGET_GMV_MTD, PLAN_TARGET_NET_MTD = None, None
             
-            if file_target:
-                try:
-                    file_target.seek(0)
-                    t_ext = os.path.splitext(file_target.name)[-1].lower()
-                    t_engine = 'xlrd' if t_ext == '.xls' else 'openpyxl'
-                    target_df = pd.read_excel(file_target, header=None, engine=t_engine)
-                    
-                    total_col_idx = -1
-                    for r in range(min(10, len(target_df))):
-                        for c in range(len(target_df.columns)):
-                            if '合计' in str(target_df.iloc[r, c]).replace(' ', ''):
-                                total_col_idx = c
-                                break
-                        if total_col_idx != -1: break
-                    
-                    gmv_row_idx, net_row_idx = -1, -1
-                    for r in range(len(target_df)):
-                        row_vals =[str(x).strip().lower().replace(' ', '') for x in target_df.iloc[r].values]
-                        if 'gmv' in row_vals and gmv_row_idx == -1: gmv_row_idx = r
-                        if ('不含税ns' in row_vals or 'netsales' in row_vals) and net_row_idx == -1: net_row_idx = r
-                    
-                    if total_col_idx != -1:
-                        if gmv_row_idx != -1:
-                            val = target_df.iloc[gmv_row_idx, total_col_idx]
-                            if pd.notna(val): PLAN_TARGET_GMV_MONTH = parse_money(val)
-                            mtd_sum = 0
-                            for i in range(1, DAYS_PASSED + 1):
-                                if total_col_idx + i < len(target_df.columns):
-                                    mtd_sum += parse_money(target_df.iloc[gmv_row_idx, total_col_idx + i])
-                            if mtd_sum > 0: PLAN_TARGET_GMV_MTD = mtd_sum
-
-                        if net_row_idx != -1:
-                            val = target_df.iloc[net_row_idx, total_col_idx]
-                            if pd.notna(val): PLAN_TARGET_NET_MONTH = parse_money(val)
-                            mtd_sum = 0
-                            for i in range(1, DAYS_PASSED + 1):
-                                if total_col_idx + i < len(target_df.columns):
-                                    mtd_sum += parse_money(target_df.iloc[net_row_idx, total_col_idx + i])
-                            if mtd_sum > 0: PLAN_TARGET_NET_MTD = mtd_sum
-                except: pass
-
-            # 融合最终 Target (规划表优先，侧边栏兜底)
-            TARGET_GMV_MONTH = PLAN_TARGET_GMV_MONTH if PLAN_TARGET_GMV_MONTH else tgt_gmv_month
-            TARGET_NET_MONTH = PLAN_TARGET_NET_MONTH if PLAN_TARGET_NET_MONTH else tgt_net_month
-            TARGET_GMV_MTD = PLAN_TARGET_GMV_MTD if PLAN_TARGET_GMV_MTD else tgt_gmv_mtd
-            TARGET_NET_MTD = PLAN_TARGET_NET_MTD if PLAN_TARGET_NET_MTD else tgt_net_mtd
+            # 融合最终 Target (侧边栏为准)
+            TARGET_GMV_MONTH = tgt_gmv_month
+            TARGET_NET_MONTH = tgt_net_month
+            TARGET_GMV_MTD = tgt_gmv_mtd
+            TARGET_NET_MTD = tgt_net_mtd
+            
+            EST_REST_MONTH_GMV = est_rest_gmv
+            EST_REST_MONTH_NET = est_rest_net
+            
+            LY_WHOLE_MONTH_ACTUAL_GMV = ly_whole_gmv
+            LY_WHOLE_MONTH_ACTUAL_NET = ly_whole_net
 
             # --- 提取去年单品同比 ---
             if ly_sycm is not None and not ly_sycm.empty:
@@ -342,23 +301,23 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
             
             mtd_net_sales = (mtd_gmv - mtd_refund_actual) / 1.13 if mtd_refund_actual > 0 else mtd_gmv / 1.13
 
-            est_whole_month_gmv = mtd_gmv + est_rest_gmv if est_rest_gmv else None
-            est_whole_month_net = mtd_net_sales + est_rest_net if est_rest_net else None
+            est_whole_month_gmv = mtd_gmv + EST_REST_MONTH_GMV if EST_REST_MONTH_GMV else None
+            est_whole_month_net = mtd_net_sales + EST_REST_MONTH_NET if EST_REST_MONTH_NET else None
 
             yoy_est_gmv = None
-            if est_whole_month_gmv and ly_whole_gmv:
-                yoy_est_gmv = (est_whole_month_gmv - ly_whole_gmv) / ly_whole_gmv
+            if est_whole_month_gmv and LY_WHOLE_MONTH_ACTUAL_GMV:
+                yoy_est_gmv = (est_whole_month_gmv - LY_WHOLE_MONTH_ACTUAL_GMV) / LY_WHOLE_MONTH_ACTUAL_GMV
                 
             yoy_est_net = None
-            if est_whole_month_net and ly_whole_net:
-                yoy_est_net = (est_whole_month_net - ly_whole_net) / ly_whole_net
+            if est_whole_month_net and LY_WHOLE_MONTH_ACTUAL_NET:
+                yoy_est_net = (est_whole_month_net - LY_WHOLE_MONTH_ACTUAL_NET) / LY_WHOLE_MONTH_ACTUAL_NET
 
             df_p1 = pd.DataFrame({
                 f'Updated {DATE_STR}':['GMV', 'Net sales(Tax excluded )'],
                 'MTD Actual':[mtd_gmv, mtd_net_sales],
                 'MTD Target':[TARGET_GMV_MTD, TARGET_NET_MTD],
                 'MTD Achi%':[calc_achi(mtd_gmv, TARGET_GMV_MTD), calc_achi(mtd_net_sales, TARGET_NET_MTD)],
-                'estimated sales of the rest of Month':[est_rest_gmv if est_rest_gmv>0 else None, est_rest_net if est_rest_net>0 else None],
+                'estimated sales of the rest of Month':[EST_REST_MONTH_GMV if EST_REST_MONTH_GMV>0 else None, EST_REST_MONTH_NET if EST_REST_MONTH_NET>0 else None],
                 'estimated sales of the whole month':[est_whole_month_gmv, est_whole_month_net],
                 f'Monthly target {MONTH_NAME}':[TARGET_GMV_MONTH, TARGET_NET_MONTH],
                 'estimated Achi% of the whole month':[calc_achi(est_whole_month_gmv, TARGET_GMV_MONTH), calc_achi(est_whole_month_net, TARGET_NET_MONTH)],
@@ -381,11 +340,12 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
                 MTD_Units=('月累计件数', 'sum')
             ).reset_index()
             
+            # 🔥 修复：强制切分品类目标，防止未定义报错
+            TARGET_LIGHTING_MTD = TARGET_GMV_MTD * 0.10 if TARGET_GMV_MTD else None
+            TARGET_FURNITURE_MTD = TARGET_GMV_MTD * 0.35 if TARGET_GMV_MTD else None
+            TARGET_ACC_MTD = TARGET_GMV_MTD * 0.55 if TARGET_GMV_MTD else None
+
             target_dict = {'Lighting': TARGET_LIGHTING_MTD, 'Furniture': TARGET_FURNITURE_MTD, 'ACC': TARGET_ACC_MTD}
-            # 如果没填品类目标，就用大盘目标拆分
-            if TARGET_LIGHTING_MTD == 0 and TARGET_GMV_MTD:
-                ratio = {'Lighting': 0.1, 'Furniture': 0.35, 'ACC': 0.55}
-                target_dict = {k: TARGET_GMV_MTD * v for k, v in ratio.items()}
             
             if cat_group.empty:
                 cat_group = pd.DataFrame({'Category':['Lighting', 'Furniture', 'ACC'], 'Daily_GMV':[None,None,None], 'MTD_Actual':[None,None,None], 'MTD_Units':[None,None,None]})
@@ -517,7 +477,7 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
             ly_row['AUV 件单价'] = get_yoy(today_auv, ly_gmv_base/ly_units_base if ly_units_base else 0)
             ly_row['Units Sold 件数'] = get_yoy(today_units_base, ly_units_base)
             ly_row['Gross Sales Demand 下单金额'] = get_yoy(gross_demand, LY_STORE_DEMAND) if LY_STORE_DEMAND > 0 else None
-            ly_row['GMV （ 成交额）'] = get_yoy(today_gmv_base, ly_gmv_base)
+            ly_row['GMV （ 成交额）'] = get_yoy(today_gmv_fallback, ly_gmv_base)
             ly_row['ACC'] = get_yoy(today_record['ACC'], ly_acc)
             ly_row['Furniture'] = get_yoy(today_record['Furniture'], ly_furn)
             ly_row['Lighting'] = get_yoy(today_record['Lighting'], ly_light)
@@ -561,7 +521,6 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
                 return ' '.join(cleaned)
             orders['商品属性'] = orders['商品属性'].apply(clean_color)
 
-            # 同样应用映射表给底表分类
             orders['Category'] = orders.apply(lambda x: get_category_by_mapping(x.get('商品ID'), x.get('商品标题'), id_to_cat), axis=1)
 
             bestsellers = orders.groupby('商品ID').agg(
