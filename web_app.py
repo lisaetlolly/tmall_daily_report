@@ -17,7 +17,7 @@ st.markdown("请在下方拖拽或点击上传今天的 4 个 Excel 数据源。
 HISTORY_FILE = 'dashboard_history.csv'
 
 # ==========================================
-# 核心函数 (适配网页流格式)
+# 核心函数 
 # ==========================================
 def parse_money(s):
     try: return float(str(s).replace('¥','').replace(',','').replace('%','').replace('元','').strip())
@@ -205,7 +205,7 @@ if st.button("⚡ 一键生成日报", type="primary", use_container_width=True)
             # Part 3: Followers Performance
             # ==========================================
             df_p3 = pd.DataFrame({
-                f'Updated {DATE_STR}': ['New Followers', 'Accumulated Followers'],
+                f'Updated {DATE_STR}':['New Followers', 'Accumulated Followers'],
                 'Data': [new_followers, acc_followers]
             })
 
@@ -240,7 +240,7 @@ if st.button("⚡ 一键生成日报", type="primary", use_container_width=True)
             }
             df_today = pd.DataFrame([today_record])
 
-            # 处理历史数据保存 (写入本地)
+            # 历史记录保存
             if os.path.exists(HISTORY_FILE):
                 history_df = pd.read_csv(HISTORY_FILE)
                 history_df = history_df[history_df['Date'] != DATE_STR] 
@@ -287,7 +287,7 @@ if st.button("⚡ 一键生成日报", type="primary", use_container_width=True)
             df_p4.rename(columns={'index': 'Daily KPIs'}, inplace=True)
 
             # ==========================================
-            # Part 5: Top 15
+            # Part 5: Top 15 (排序逻辑彻底重构)
             # ==========================================
             orders['商品ID'] = orders.get('商品ID', pd.Series([])).astype(str).str.replace(r'\.0$', '', regex=True)
 
@@ -311,29 +311,42 @@ if st.button("⚡ 一键生成日报", type="primary", use_container_width=True)
                 return ' '.join(cleaned)
             orders['商品属性'] = orders.get('商品属性', pd.Series([''])).apply(clean_color)
 
-            bestsellers = orders.groupby('商品ID').agg(
-                Gross_Sales=('买家实付金额', 'sum'),
+            # 1. 从底表中聚合 SPU 的文本信息和件数
+            bestsellers_orders = orders.groupby('商品ID').agg(
                 Units=('购买数量', 'sum'),
                 SKU=('商家编码', join_unique),
                 Colour=('商品属性', join_unique),
                 Description=('Description', 'first')
             ).reset_index()
 
-            bestsellers = bestsellers.sort_values('Gross_Sales', ascending=False).head(15).reset_index(drop=True)
+            # 2. 从生意参谋中聚合官方的 GMV 数据！
+            sycm_item['商品ID'] = sycm_item.get('商品ID', pd.Series([])).astype(str).str.replace(r'\.0$', '', regex=True)
+            sycm_item_gmv = sycm_item.groupby('商品ID')['当日金额'].sum().reset_index()
+            sycm_item_gmv.rename(columns={'当日金额': 'SYCM_GMV'}, inplace=True)
+
+            # 3. 将两者合并，用生意参谋的官方金额进行绝对排序！
+            bestsellers = pd.merge(bestsellers_orders, sycm_item_gmv, on='商品ID', how='left')
+            bestsellers['SYCM_GMV'] = bestsellers['SYCM_GMV'].fillna(0)
+            
+            bestsellers = bestsellers.sort_values('SYCM_GMV', ascending=False).head(15).reset_index(drop=True)
+            
+            # 显示生意参谋的官方金额
+            bestsellers['Gross_Sales'] = bestsellers['SYCM_GMV']
             bestsellers['Contribution%'] = bestsellers['Gross_Sales'] / store_gmv if store_gmv > 0 else 0
             bestsellers['No.'] = bestsellers.index + 1
             bestsellers['Pictures'] = ''
             df_p5 = bestsellers[['No.', 'SKU', 'Description', 'Colour', 'Pictures', 'Gross_Sales', 'Units', 'Contribution%']]
 
             # ==========================================
-            # 在内存中写入 Excel (用于网页下载)
+            # 在内存中写入 Excel (完美去合并排版)
             # ==========================================
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 workbook = writer.book
                 worksheet = workbook.add_worksheet('Daily Dashboard')
                 
-                fmt_title = workbook.add_format({'bold': True, 'bg_color': '#000000', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'font_size': 12})
+                # 定义各种无敌格式 (使用 center_across 替代 merge_range)
+                fmt_title = workbook.add_format({'bold': True, 'bg_color': '#000000', 'font_color': 'white', 'align': 'center_across', 'valign': 'vcenter', 'font_size': 12})
                 fmt_header = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center'})
                 fmt_num = workbook.add_format({'num_format': '#,##0', 'border': 1, 'align': 'center'})
                 fmt_float = workbook.add_format({'num_format': '0.00', 'border': 1, 'align': 'center'}) 
@@ -344,7 +357,13 @@ if st.button("⚡ 一键生成日报", type="primary", use_container_width=True)
                 current_row = 0
 
                 def write_block(title, df, start_row):
-                    worksheet.merge_range(start_row, 0, start_row, len(df.columns)-1, title, fmt_title)
+                    # 💡 核心修复：彻底取消合并单元格！改用 center_across 跨列居中！
+                    for col_num in range(len(df.columns)):
+                        if col_num == 0:
+                            worksheet.write(start_row, col_num, title, fmt_title)
+                        else:
+                            worksheet.write(start_row, col_num, "", fmt_title) # 给同行的空单元格填同样的底色和格式
+                            
                     for col_num, value in enumerate(df.columns):
                         worksheet.write(start_row + 1, col_num, value, fmt_header)
                     for r_idx, row in df.iterrows():
@@ -383,7 +402,6 @@ if st.button("⚡ 一键生成日报", type="primary", use_container_width=True)
             st.success("🎉 报表生成成功！点击下方按钮下载。")
             output.seek(0)
             
-            # 提供下载按钮
             st.download_button(
                 label="📥 下载 Tmall_Daily_Dashboard.xlsx",
                 data=output,
@@ -394,4 +412,3 @@ if st.button("⚡ 一键生成日报", type="primary", use_container_width=True)
 
         except Exception as e:
             st.error(f"❌ 程序发生错误: {e}")
-            
