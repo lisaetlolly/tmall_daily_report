@@ -78,18 +78,10 @@ def parse_money(s):
     try: return float(str(s).replace('¥','').replace(',','').replace('%','').replace('元','').strip())
     except: return 0.0
 
-# 🔥 核心升级：基于 ID 映射表的分类逻辑
-def get_category_by_mapping(item_id, title, mapping_dict):
-    # 1. 优先使用 ID 映射表
-    if mapping_dict and str(item_id) in mapping_dict:
-        cat_cn = str(mapping_dict[str(item_id)]).strip()
-        if '灯' in cat_cn: return 'Lighting'
-        if '家具' in cat_cn: return 'Furniture'
-        return 'ACC' # 配饰、购物金等全归入 ACC
-    
-    # 2. 如果是新品不在表里，使用 AI 关键词智能兜底
+def categorize_item(title):
     t = str(title).lower()
     if any(x in t for x in['灯', 'light', 'lamp', 'portable', 'shade', 'pendant', 'bulb', 'sconce', 'apex']): return 'Lighting'
+    # 剔除 table, stool 等易混淆词，只保留核心大件作为家具，其余全归 ACC，对齐业务口径
     if any(x in t for x in['沙发', '柜', '床', 'sofa', 'cabinet', 'cabine', 'bed', 'desk', 'chair', '椅']): return 'Furniture'
     return 'ACC'
 
@@ -179,7 +171,7 @@ def calc_achi(actual, target):
     return actual / target
 
 # ==========================================
-# 主界面：文件上传区
+# UI 布局: 上传区
 # ==========================================
 st.markdown("### 🗂️ 请上传数据源")
 col1, col2, col3 = st.columns(3)
@@ -188,10 +180,9 @@ with col1:
     file_ly = st.file_uploader("4. 🕰️ 去年当日单品", type=['xlsx', 'xls', 'csv'])
 with col2: 
     file_item = st.file_uploader("2. 📥 今日单品生参", type=['xlsx', 'xls', 'csv'])
-    file_mapping = st.file_uploader("5. 🏷️ 商品分类映射表 (解决品类分歧)", type=['xlsx', 'xls', 'csv'])
 with col3: 
     file_store = st.file_uploader("3. 📥 店铺大盘表 (你那15列的表)", type=['xlsx', 'xls', 'csv'])
-    file_history = st.file_uploader("6. 💾 历史记录表(选传)", type=['csv'])
+    file_history = st.file_uploader("5. 💾 历史记录表(选传)", type=['csv'])
 
 st.divider()
 
@@ -203,7 +194,7 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
         st.warning("⚠️ 至少需要上传前 3 个文件中的一个！")
         st.stop()
 
-    with st.spinner("🔄 AI 正在严格校验数据，应用商品主数据映射..."):
+    with st.spinner("🔄 AI 正在严格校验数据，没有参数则保留空白..."):
         try:
             # --- 日期识别 ---
             auto_date_str = extract_date_from_excel(file_store)
@@ -219,18 +210,6 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
             DAYS_PASSED = d.day
             MONTH_NAME = d.strftime('%b') 
             WEEK_NUM = d.isocalendar()[1] 
-
-            # --- 解析分类映射表 (MDM) ---
-            id_to_cat = {}
-            if file_mapping:
-                mapping_df = read_excel_smart(file_mapping, '一级')
-                if mapping_df is None: 
-                    mapping_df = read_excel_smart(file_mapping, '商品ID')
-                
-                if mapping_df is not None and '商品ID' in mapping_df.columns and '一级' in mapping_df.columns:
-                    mapping_df['商品ID'] = mapping_df['商品ID'].astype(str).str.replace(r'\.0$', '', regex=True)
-                    id_to_cat = dict(zip(mapping_df['商品ID'], mapping_df['一级']))
-                    st.success(f"🏷️ 成功加载商品主数据映射表！共载入 {len(id_to_cat)} 条分类规则。")
 
             # --- 安全读取底层数据 ---
             orders = read_excel_smart(file_order, '商品标题')
@@ -248,27 +227,25 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
 
             # --- 提取大盘表中的数据 ---
             store_gmv = get_col_val(sycm_store,['支付金额', '成交额'])
-            store_demand = get_col_val(sycm_store,['下单金额']) 
-            store_refund = get_col_val(sycm_store,['成功退款金额'])
+            store_demand = get_col_val(sycm_store,['下单金额', 'Gross Sales Demand']) 
+            store_refund = get_col_val(sycm_store,['成功退款金额', '退款金额（完结时间）'])
             store_traffic = get_col_val(sycm_store,['访客数'])
             store_buyers = get_col_val(sycm_store,['支付买家数'])
             store_cr = get_col_val(sycm_store,['支付转化率'])
             if store_cr > 1: store_cr /= 100 
-            new_followers = get_col_val(sycm_store,['新增粉丝数'])
-            acc_followers = get_col_val(sycm_store,['累计粉丝数'])
+            new_followers = get_col_val(sycm_store,['新增粉丝数', '关注店铺人数'])
+            acc_followers = get_col_val(sycm_store,['累计粉丝数', '总粉丝数'])
 
-            LY_STORE_GMV = get_col_val(sycm_store,['去年今日gmv', '去年当日gmv'])
+            LY_STORE_GMV = get_col_val(sycm_store,['去年今日GMV', '去年当日GMV'])
             LY_STORE_TRAFFIC = get_col_val(sycm_store,['去年今日访客', '去年当日访客'])
-            LY_STORE_BUYERS = get_col_val(sycm_store, ['去年今日买家', '去年当日买家'])
+            LY_STORE_BUYERS = get_col_val(sycm_store,['去年今日买家', '去年当日买家'])
             LY_STORE_UNITS = get_col_val(sycm_store,['去年今日件数', '去年当日件数'])
             LY_STORE_REFUND = get_col_val(sycm_store,['去年今日退款', '去年当日退款'])
             LY_STORE_DEMAND = get_col_val(sycm_store,['去年今日下单金额'])
 
             # --- 提取去年单品同比 ---
             if ly_sycm is not None and not ly_sycm.empty:
-                ly_sycm['商品ID'] = ly_sycm.get('商品ID', pd.Series([])).astype(str).str.replace(r'\.0$', '', regex=True)
-                ly_sycm['Category'] = ly_sycm.apply(lambda x: get_category_by_mapping(x.get('商品ID'), x.get('商品名称'), id_to_cat), axis=1)
-                
+                ly_sycm['Category'] = ly_sycm['商品名称'].apply(categorize_item)
                 ly_item_gmv = ly_sycm['支付金额'].apply(parse_money).sum()
                 ly_item_units = ly_sycm['支付件数'].apply(parse_money).sum()
                 ly_cat = ly_sycm.groupby('Category')['支付金额'].apply(lambda x: x.apply(parse_money).sum())
@@ -279,7 +256,7 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
                 ly_item_gmv = ly_item_units = ly_acc = ly_furn = ly_light = 0
 
             # ==========================================
-            # Part 1: MTD (使用侧边栏参数)
+            # Part 1: MTD 
             # ==========================================
             mtd_gmv_item = sycm_item['月累计支付金额'].apply(parse_money).sum() if not sycm_item.empty else 0
             mtd_gmv = manual_mtd_gmv if manual_mtd_gmv > 0 else mtd_gmv_item
@@ -310,11 +287,9 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
             })
 
             # ==========================================
-            # Part 2: Categories MTD
+            # Part 2: Categories MTD (修复目标未定义Bug)
             # ==========================================
-            sycm_item['商品ID'] = sycm_item.get('商品ID', pd.Series([])).astype(str).str.replace(r'\.0$', '', regex=True)
-            sycm_item['Category'] = sycm_item.apply(lambda x: get_category_by_mapping(x.get('商品ID'), x.get('商品名称'), id_to_cat), axis=1)
-            
+            sycm_item['Category'] = sycm_item['商品名称'].apply(categorize_item)
             sycm_item['月累计金额'] = sycm_item['月累计支付金额'].apply(parse_money)
             sycm_item['月累计件数'] = sycm_item['月累计支付件数'].apply(parse_money)
             sycm_item['当日金额'] = sycm_item['支付金额'].apply(parse_money)
@@ -325,10 +300,12 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
                 MTD_Units=('月累计件数', 'sum')
             ).reset_index()
             
+            # 🔥 修复：根据侧边栏的 MTD GMV 目标，按比例自动切分给三个品类
+            TARGET_LIGHTING_MTD = tgt_gmv_mtd * 0.10
+            TARGET_FURNITURE_MTD = tgt_gmv_mtd * 0.35
+            TARGET_ACC_MTD = tgt_gmv_mtd * 0.55
+            
             target_dict = {'Lighting': TARGET_LIGHTING_MTD, 'Furniture': TARGET_FURNITURE_MTD, 'ACC': TARGET_ACC_MTD}
-            if TARGET_LIGHTING_MTD == 0:
-                ratio = {'Lighting': 0.1, 'Furniture': 0.35, 'ACC': 0.55}
-                target_dict = {k: tgt_gmv_mtd * v for k, v in ratio.items()}
             
             if cat_group.empty:
                 cat_group = pd.DataFrame({'Category':['Lighting', 'Furniture', 'ACC'], 'Daily_GMV':[None,None,None], 'MTD_Actual':[None,None,None], 'MTD_Units':[None,None,None]})
@@ -460,7 +437,7 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
             ly_row['AUV 件单价'] = get_yoy(today_auv, ly_gmv_base/ly_units_base if ly_units_base else 0)
             ly_row['Units Sold 件数'] = get_yoy(today_units_base, ly_units_base)
             ly_row['Gross Sales Demand 下单金额'] = get_yoy(gross_demand, LY_STORE_DEMAND) if LY_STORE_DEMAND > 0 else None
-            ly_row['GMV （ 成交额）'] = get_yoy(today_gmv_base, ly_gmv_base)
+            ly_row['GMV （ 成交额）'] = get_yoy(today_gmv_fallback, ly_gmv_base)
             ly_row['ACC'] = get_yoy(today_record['ACC'], ly_acc)
             ly_row['Furniture'] = get_yoy(today_record['Furniture'], ly_furn)
             ly_row['Lighting'] = get_yoy(today_record['Lighting'], ly_light)
@@ -503,9 +480,6 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
                 cleaned =[p.split(':', 1)[1].strip() if ':' in p else p.strip() for p in parts if p.strip()]
                 return ' '.join(cleaned)
             orders['商品属性'] = orders['商品属性'].apply(clean_color)
-
-            # 使用映射表给底表打标
-            orders['Category'] = orders.apply(lambda x: get_category_by_mapping(x.get('商品ID'), x.get('商品标题'), id_to_cat), axis=1)
 
             bestsellers = orders.groupby('商品ID').agg(
                 Order_Gross_Sales=('买家实付金额', 'sum'),
@@ -609,4 +583,4 @@ if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True)
                 )
 
         except Exception as e:
-            st.error(f"❌ 程序发生错误: {e}")
+            st.erro
