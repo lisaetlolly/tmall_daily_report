@@ -228,6 +228,9 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                 DAYS_PASSED = d.day
                 MONTH_NAME = d.strftime('%b') 
                 WEEK_NUM = d.isocalendar()[1] 
+                
+                # 【新功能】动态计算去年的年份缩写 (例如 2026年 -> 去年就是25, 2025年 -> 去年就是24)
+                ly_year_str = str(d.year - 1)[-2:]
 
                 id_to_cat = {}
                 if file_mapping:
@@ -313,7 +316,8 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                     'estimated sales of the whole month':[est_whole_month_gmv, est_whole_month_net],
                     f'Monthly target {MONTH_NAME}':[TARGET_GMV_MONTH, TARGET_NET_MONTH],
                     'estimated Achi% of the whole month':[calc_achi(est_whole_month_gmv, TARGET_GMV_MONTH), calc_achi(est_whole_month_net, TARGET_NET_MONTH)],
-                    f'estimated whole month sales vs Y25 {MONTH_NAME}':[yoy_est_gmv, yoy_est_net] 
+                    # 动态植入年份标签，不再写死 Y25
+                    f'estimated whole month sales vs Y{ly_year_str} {MONTH_NAME}':[yoy_est_gmv, yoy_est_net] 
                 })
 
                 sycm_item['商品ID'] = sycm_item.get('商品ID', pd.Series([])).astype(str).str.replace(r'\.0$', '', regex=True)
@@ -518,6 +522,7 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                 else:
                     bestsellers['Gross_Sales'] = bestsellers['Order_Gross_Sales']
 
+                # 【确保】日报畅销榜也是拉取 TOP 15
                 bestsellers = bestsellers.sort_values('Gross_Sales', ascending=False).head(15).reset_index(drop=True)
                 bestsellers['Contribution%'] = bestsellers['Gross_Sales'] / today_gmv_fallback if today_gmv_fallback > 0 else None
                 bestsellers['No.'] = bestsellers.index + 1
@@ -554,7 +559,8 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                                 col_name = str(df.columns[c_idx])
                                 if pd.isna(val) or val is None or val == '':
                                     worksheet.write(start_row + 2 + r_idx, c_idx, '-', fmt_text) 
-                                elif 'vs Y25' in col_name or 'vs LY' in col_name:
+                                # 动态识别年份后缀
+                                elif 'vs Y' in col_name or 'vs LY' in col_name:
                                     worksheet.write(start_row + 2 + r_idx, c_idx, float(val), fmt_pct_int) 
                                 elif 'CR' in metric_name:
                                     worksheet.write(start_row + 2 + r_idx, c_idx, val, fmt_pct_cr) 
@@ -572,13 +578,13 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                     current_row = write_block("Tmall Store Sales by categories - MTD", df_p2, current_row)
                     current_row = write_block("Tmall Store Followers performance", df_p3, current_row)
                     current_row = write_block(f"Tmall Store Week {WEEK_NUM} Daily Dashboard", df_p4, current_row)
-                    current_row = write_block("Tmall Store Bestsellers - Daily", df_p5, current_row)
+                    current_row = write_block("Tmall Store Bestsellers - Daily (TOP 15)", df_p5, current_row)
 
                     worksheet.set_column('A:A', 25)
                     worksheet.set_column('B:D', 20)
                     worksheet.set_column('E:Z', 15)
 
-                st.success("🎉 数据处理完成！")
+                st.success("🎉 日报数据处理完成！")
                 
                 dl_col1, dl_col2 = st.columns(2)
                 with dl_col1:
@@ -604,225 +610,238 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
 # =======================================================================================================
 # ========================================== 模块二：月度排行 ==========================================
 # =======================================================================================================
-    elif app_mode == "📅 月度排行 (HAY Ranking)":
+elif app_mode == "📅 月度排行 (HAY Ranking)":
     
-st.set_page_config(page_title="生意参谋看板 - HAY Ranking", layout="wide")
-st.title("📊 生意参谋商品数据看板 - HAY Ranking")
-
-st.sidebar.header("📂 数据上传")
-file_curr = st.sidebar.file_uploader("1. 上传【今年当月】生意参谋数据", type=["xlsx", "xls", "csv"])
-file_last = st.sidebar.file_uploader("2. 上传【去年当月】生意参谋数据", type=["xlsx", "xls", "csv"])
-file_map = st.sidebar.file_uploader("3. 上传【分类映射表】", type=["xlsx", "xls", "csv"])
-
-# --- 数据清洗基础函数 ---
-def load_data(file):
-    if file.name.endswith('.csv'):
-        try:
-            df = pd.read_csv(file, encoding='gbk')
-        except:
-            file.seek(0)
-            df = pd.read_csv(file, encoding='utf-8')
-    else:
-        df = pd.read_excel(file)
-
-    df.columns = df.columns.astype(str).str.strip()
-    if '商品ID' not in df.columns:
-        for i in range(min(20, len(df))):
-            row_values = df.iloc[i].astype(str).str.strip().values
-            if '商品ID' in row_values:
-                df.columns = row_values
-                df = df.iloc[i+1:].reset_index(drop=True)
-                break
-    df.columns = df.columns.astype(str).str.strip()
-    return df
-
-def clean_id(df):
-    if '商品ID' in df.columns:
-        df['商品ID'] = df['商品ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-    return df
-
-def to_numeric_col(series):
-    cleaned = series.astype(str).str.replace(',', '').str.replace(' ', '')
-    return pd.to_numeric(cleaned, errors='coerce').fillna(0)
-
-# --- Excel 完美还原排版生成函数 (已适配 TOP 15) ---
-def generate_excel_dashboard(df_ttl, df_fav, dict_cats, df_return, cat_names):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        workbook = writer.book
-        title_fmt = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#CDE9F5', 'valign': 'vcenter'})
-        header_fmt = workbook.add_format({'bold': True, 'bg_color': '#CDE9F5', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
-        cell_fmt = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        num_fmt = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0'})
-        pct_fmt = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '0%'})
-        
-        for cat_name in cat_names:
-            sheet_name = f"HAY Ranking - {cat_name}"[:31]
-            worksheet = workbook.add_worksheet(sheet_name)
-            worksheet.write('A1', 'HAY Ranking', title_fmt)
-            worksheet.set_row(0, 20)
-            
-            def write_table_to_excel(df, start_row, start_col):
-                for col_idx, col_name in enumerate(df.columns):
-                    worksheet.write(start_row, start_col + col_idx, col_name, header_fmt)
-                for row_idx, row in enumerate(df.values):
-                    for col_idx, val in enumerate(row):
-                        col_name = df.columns[col_idx]
-                        fmt = cell_fmt
-                        if isinstance(val, (int, float)):
-                            if 'Share%' in col_name or 'YOY' in col_name or '率' in col_name:
-                                fmt = pct_fmt
-                            elif 'Value' in col_name or 'QTY' in col_name or '人数' in col_name:
-                                fmt = num_fmt
-                        if pd.isna(val) or val == "":
-                            worksheet.write(start_row + 1 + row_idx, start_col + col_idx, "-", cell_fmt)
-                        else:
-                            worksheet.write(start_row + 1 + row_idx, start_col + col_idx, val, fmt)
-            
-            # 上半部分表格位置不变
-            write_table_to_excel(df_ttl, start_row=2, start_col=0)
-            write_table_to_excel(df_fav, start_row=2, start_col=8)
-            
-            # 【关键修改】因为上半部分变成了15行，下半部分表格的起始行从 16 挪到了 21，防止重叠
-            cat_df = dict_cats[cat_name].copy()
-            cat_df.rename(columns={'Rank': f'{cat_name}\nRank', 'Share% of Category': f'Share% of\n{cat_name}'}, inplace=True)
-            write_table_to_excel(cat_df, start_row=21, start_col=0)
-            write_table_to_excel(df_return, start_row=21, start_col=8)
-            
-            worksheet.set_column('A:A', 8)
-            worksheet.set_column('B:B', 30) 
-            worksheet.set_column('C:C', 8)
-            worksheet.set_column('D:G', 12)
-            worksheet.set_column('H:H', 2)
-            worksheet.set_column('I:I', 8)
-            worksheet.set_column('J:J', 30) 
-            worksheet.set_column('K:K', 8)
-            worksheet.set_column('L:M', 12)
-    return output.getvalue()
-
-# ----------------------------
-
-if file_curr and file_last and file_map:
-    with st.spinner('正在执行强力去重与精密计算 (TOP 15)...'):
-        
-        df_curr = clean_id(load_data(file_curr))
-        df_last = clean_id(load_data(file_last))
-        df_map = clean_id(load_data(file_map))
-
-        # --- 强力去重逻辑 ---
-        if '商品名称' in df_curr.columns:
-            df_curr = df_curr.sort_values(by='商品名称', na_position='last').drop_duplicates(subset=['商品ID'], keep='first')
+    st.title("📊 生意参谋商品数据看板 - HAY Ranking")
+    
+    st.sidebar.header("📂 数据上传")
+    file_curr = st.sidebar.file_uploader("1. 上传【今年当月】生意参谋数据", type=["xlsx", "xls", "csv"])
+    file_last = st.sidebar.file_uploader("2. 上传【去年当月】生意参谋数据", type=["xlsx", "xls", "csv"])
+    file_map = st.sidebar.file_uploader("3. 上传【分类映射表】", type=["xlsx", "xls", "csv"])
+    
+    # --- 数据清洗基础函数 ---
+    def load_data(file):
+        if file.name.endswith('.csv'):
+            try:
+                df = pd.read_csv(file, encoding='gbk')
+            except:
+                file.seek(0)
+                df = pd.read_csv(file, encoding='utf-8')
         else:
-            df_curr = df_curr.drop_duplicates(subset=['商品ID'], keep='first')
-
-        if '支付金额' in df_last.columns:
-            df_last['去年支付金额'] = to_numeric_col(df_last['支付金额'])
-            df_last_sales = df_last.groupby('商品ID', as_index=False)['去年支付金额'].sum()
-        else:
-            df_last_sales = pd.DataFrame(columns=['商品ID', '去年支付金额'])
-
-        if '一级' in df_map.columns:
-            df_map_unique = df_map.drop_duplicates(subset=['商品ID'], keep='first')[['商品ID', '一级']]
-        else:
-            df_map_unique = pd.DataFrame(columns=['商品ID', '一级'])
-
-        # --- 合并数据 ---
-        df_merged = pd.merge(df_curr, df_last_sales, on='商品ID', how='left')
-        df_merged = pd.merge(df_merged, df_map_unique, on='商品ID', how='left')
-        df_merged['一级'] = df_merged['一级'].fillna('未分类')
-
-        # --- 强制转换核心指标 ---
-        numeric_columns =['支付金额', '去年支付金额', '支付件数', '商品收藏人数', '商品加购人数', '商品访客数', '成功退款金额']
-        for col in numeric_columns:
-            if col in df_merged.columns:
-                df_merged[col] = to_numeric_col(df_merged[col])
+            df = pd.read_excel(file)
+    
+        df.columns = df.columns.astype(str).str.strip()
+        if '商品ID' not in df.columns:
+            for i in range(min(20, len(df))):
+                row_values = df.iloc[i].astype(str).str.strip().values
+                if '商品ID' in row_values:
+                    df.columns = row_values
+                    df = df.iloc[i+1:].reset_index(drop=True)
+                    break
+        df.columns = df.columns.astype(str).str.strip()
+        return df
+    
+    def clean_id(df):
+        if '商品ID' in df.columns:
+            df['商品ID'] = df['商品ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        return df
+    
+    def to_numeric_col(series):
+        cleaned = series.astype(str).str.replace(',', '').str.replace(' ', '')
+        return pd.to_numeric(cleaned, errors='coerce').fillna(0)
+    
+    # --- Excel 完美还原排版生成函数 (TOP 15) ---
+    def generate_excel_dashboard(df_ttl, df_fav, dict_cats, df_return, display_cat_names):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            workbook = writer.book
+            title_fmt = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#CDE9F5', 'valign': 'vcenter'})
+            header_fmt = workbook.add_format({'bold': True, 'bg_color': '#CDE9F5', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
+            cell_fmt = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
+            num_fmt = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0'})
+            pct_fmt = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '0%'})
+            
+            # 为全店总榜和每个类目都生成独立的 Sheet 页
+            for cat_name in display_cat_names:
+                sheet_name = f"HAY Ranking - {cat_name}"[:31]
+                worksheet = workbook.add_worksheet(sheet_name)
+                worksheet.write('A1', 'HAY Ranking', title_fmt)
+                worksheet.set_row(0, 20)
+                
+                def write_table_to_excel(df, start_row, start_col):
+                    for col_idx, col_name in enumerate(df.columns):
+                        worksheet.write(start_row, start_col + col_idx, col_name, header_fmt)
+                    for row_idx, row in enumerate(df.values):
+                        for col_idx, val in enumerate(row):
+                            col_name = df.columns[col_idx]
+                            fmt = cell_fmt
+                            if isinstance(val, (int, float)):
+                                if 'Share%' in col_name or 'YOY' in col_name or '率' in col_name:
+                                    fmt = pct_fmt
+                                elif 'Value' in col_name or 'QTY' in col_name or '人数' in col_name:
+                                    fmt = num_fmt
+                            if pd.isna(val) or val == "":
+                                worksheet.write(start_row + 1 + row_idx, start_col + col_idx, "-", cell_fmt)
+                            else:
+                                worksheet.write(start_row + 1 + row_idx, start_col + col_idx, val, fmt)
+                
+                # 左上角：TTL Rank 
+                write_table_to_excel(df_ttl, start_row=2, start_col=0)
+                # 右上角：收藏加购 Rank 
+                write_table_to_excel(df_fav, start_row=2, start_col=8)
+                
+                # 左下角：动态显示该页面的榜单（总榜或某一大类榜）
+                cat_df = dict_cats[cat_name].copy()
+                cat_df.rename(columns={'Rank': f'{cat_name}\nRank', 'Share% of Category': f'Share% of\n{cat_name}'}, inplace=True)
+                write_table_to_excel(cat_df, start_row=21, start_col=0)
+                
+                # 右下角：退货 Rank
+                write_table_to_excel(df_return, start_row=21, start_col=8)
+                
+                worksheet.set_column('A:A', 8)
+                worksheet.set_column('B:B', 30) 
+                worksheet.set_column('C:C', 8)
+                worksheet.set_column('D:G', 12)
+                worksheet.set_column('H:H', 2)
+                worksheet.set_column('I:I', 8)
+                worksheet.set_column('J:J', 30) 
+                worksheet.set_column('K:K', 8)
+                worksheet.set_column('L:M', 12)
+        return output.getvalue()
+    
+    # ----------------------------
+    
+    if file_curr and file_last and file_map:
+        with st.spinner('正在执行强力去重与精密计算 (TOP 15)...'):
+            
+            df_curr = clean_id(load_data(file_curr))
+            df_last = clean_id(load_data(file_last))
+            df_map = clean_id(load_data(file_map))
+    
+            # --- 强力去重逻辑 ---
+            if '商品名称' in df_curr.columns:
+                df_curr = df_curr.sort_values(by='商品名称', na_position='last').drop_duplicates(subset=['商品ID'], keep='first')
             else:
-                df_merged[col] = 0.0 
-
-        # --- 核心指标计算 ---
-        total_store_value = df_merged['支付金额'].sum()
-        total_store_refund = df_merged['成功退款金额'].sum() if df_merged['成功退款金额'].sum() > 0 else 1
-
-        df_merged['Value'] = df_merged['支付金额']
-        df_merged['QTY'] = df_merged['支付件数']
-        df_merged['Share% of TTL'] = np.where(total_store_value > 0, df_merged['Value'] / total_store_value, 0)
-        df_merged['YOY'] = np.where(df_merged['去年支付金额'] > 0, 
-                                   (df_merged['Value'] - df_merged['去年支付金额']) / df_merged['去年支付金额'], 
-                                   np.nan)
-        df_merged['收加人数'] = df_merged['商品收藏人数'] + df_merged['商品加购人数']
-        df_merged['收加率%'] = np.where(df_merged['商品访客数'] > 0, df_merged['收加人数'] / df_merged['商品访客数'], 0)
-        df_merged['Picture'] = ""
-        
-        if '商品名称' in df_merged.columns:
-            df_merged['Product'] = df_merged['商品名称'].fillna("未命名_ID:" + df_merged['商品ID'])
-        else:
-            df_merged['Product'] = df_merged['商品ID']
-
-        df_merged['Return Value'] = df_merged['成功退款金额']
-        df_merged['Return Share%'] = df_merged['Return Value'] / total_store_refund
-
-        # ==========================================
-        # 🚀 关键修改区域：全部提取改为 .head(15) 🚀
-        # ==========================================
-        
-        raw_ttl = df_merged.sort_values(by='Value', ascending=False).head(15)[['Product', 'Picture', 'Value', 'QTY', 'Share% of TTL', 'YOY']].copy()
-        raw_ttl.insert(0, 'TTL Rank', range(1, len(raw_ttl) + 1))
-        
-        raw_fav = df_merged.sort_values(by='收加人数', ascending=False).head(15)[['Product', 'Picture', '收加人数', '收加率%']].copy()
-        raw_fav.insert(0, 'Rank', range(1, len(raw_fav) + 1))
-        
-        category_sales = df_merged.groupby('一级')['Value'].sum().sort_values(ascending=False)
-        top_3_categories =[cat for cat in category_sales.index if cat != '未分类'][:3]
-        
-        raw_cats = {}
-        for cat in top_3_categories:
-            c_df = df_merged[df_merged['一级'] == cat].copy()
-            c_total = c_df['Value'].sum()
-            c_df['Share% of Category'] = np.where(c_total > 0, c_df['Value'] / c_total, 0)
-            c_top15 = c_df.sort_values(by='Value', ascending=False).head(15)[['Product', 'Picture', 'Value', 'QTY', 'Share% of Category', 'YOY']].copy()
-            c_top15.insert(0, 'Rank', range(1, len(c_top15) + 1))
-            raw_cats[cat] = c_top15
+                df_curr = df_curr.drop_duplicates(subset=['商品ID'], keep='first')
+    
+            if '支付金额' in df_last.columns:
+                df_last['去年支付金额'] = to_numeric_col(df_last['支付金额'])
+                df_last_sales = df_last.groupby('商品ID', as_index=False)['去年支付金额'].sum()
+            else:
+                df_last_sales = pd.DataFrame(columns=['商品ID', '去年支付金额'])
+    
+            if '一级' in df_map.columns:
+                df_map_unique = df_map.drop_duplicates(subset=['商品ID'], keep='first')[['商品ID', '一级']]
+            else:
+                df_map_unique = pd.DataFrame(columns=['商品ID', '一级'])
+    
+            # --- 合并数据 ---
+            df_merged = pd.merge(df_curr, df_last_sales, on='商品ID', how='left')
+            df_merged = pd.merge(df_merged, df_map_unique, on='商品ID', how='left')
+            df_merged['一级'] = df_merged['一级'].fillna('未分类')
+    
+            # --- 强制转换核心指标 ---
+            numeric_columns =['支付金额', '去年支付金额', '支付件数', '商品收藏人数', '商品加购人数', '商品访客数', '成功退款金额']
+            for col in numeric_columns:
+                if col in df_merged.columns:
+                    df_merged[col] = to_numeric_col(df_merged[col])
+                else:
+                    df_merged[col] = 0.0 
+    
+            # --- 核心指标计算 ---
+            total_store_value = df_merged['支付金额'].sum()
+            total_store_refund = df_merged['成功退款金额'].sum() if df_merged['成功退款金额'].sum() > 0 else 1
+    
+            df_merged['Value'] = df_merged['支付金额']
+            df_merged['QTY'] = df_merged['支付件数']
+            df_merged['Share% of TTL'] = np.where(total_store_value > 0, df_merged['Value'] / total_store_value, 0)
+            df_merged['YOY'] = np.where(df_merged['去年支付金额'] > 0, 
+                                       (df_merged['Value'] - df_merged['去年支付金额']) / df_merged['去年支付金额'], 
+                                       np.nan)
+            df_merged['收加人数'] = df_merged['商品收藏人数'] + df_merged['商品加购人数']
+            df_merged['收加率%'] = np.where(df_merged['商品访客数'] > 0, df_merged['收加人数'] / df_merged['商品访客数'], 0)
+            df_merged['Picture'] = ""
             
-        raw_return = df_merged.sort_values(by='Return Value', ascending=False).head(15)[['Product', 'Picture', 'Return Value', 'Return Share%']].copy()
-        raw_return.rename(columns={'Return Value': 'Returned Value', 'Return Share%': 'Share% of TTL'}, inplace=True)
-        raw_return.insert(0, 'HAY Rank', range(1, len(raw_return) + 1))
-
-        # 生成 Excel
-        excel_data = generate_excel_dashboard(raw_ttl, raw_fav, raw_cats, raw_return, top_3_categories)
-
-        # --- 页面展示 ---
-        st.success("✅ 数据计算及 Excel 生成完毕！(已适配 TOP 15 排版)")
-        st.download_button(label="📥 一键下载无重复版 Excel 报表 (TOP 15)", data=excel_data, file_name="HAY_Ranking_Dashboard_Top15.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-        
-        def fmt_display(df):
-            res = df.copy()
-            for col in res.columns:
-                if 'Value' in col or 'QTY' in col or '人数' in col:
-                    res[col] = res[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "-")
-                elif 'Share%' in col or 'YOY' in col or '率' in col:
-                    res[col] = res[col].apply(lambda x: f"{x:.0%}" if pd.notnull(x) else "-")
-            return res.set_index(res.columns[0])
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("🏆 全店销售 Top 15 (TTL Rank)")
-            st.dataframe(fmt_display(raw_ttl), use_container_width=True)
-        with col2:
-            st.subheader("❤️ 收藏加购 Top 15")
-            st.dataframe(fmt_display(raw_fav), use_container_width=True)
-
-        st.markdown("---")
-        col3, col4 = st.columns(2)
-        with col3:
-            st.subheader("📦 三大核心类目 Top 15")
-            if len(top_3_categories) > 0:
-                tabs = st.tabs([f"{cat} Rank" for cat in top_3_categories])
-                for i, cat in enumerate(top_3_categories):
+            if '商品名称' in df_merged.columns:
+                df_merged['Product'] = df_merged['商品名称'].fillna("未命名_ID:" + df_merged['商品ID'])
+            else:
+                df_merged['Product'] = df_merged['商品ID']
+    
+            df_merged['Return Value'] = df_merged['成功退款金额']
+            df_merged['Return Share%'] = df_merged['Return Value'] / total_store_refund
+    
+            # ==========================================
+            # 🚀 各项排行全部固定抽取前 15 名 (TOP 15) 🚀
+            # ==========================================
+            
+            raw_ttl = df_merged.sort_values(by='Value', ascending=False).head(15)[['Product', 'Picture', 'Value', 'QTY', 'Share% of TTL', 'YOY']].copy()
+            raw_ttl.insert(0, 'TTL Rank', range(1, len(raw_ttl) + 1))
+            
+            raw_fav = df_merged.sort_values(by='收加人数', ascending=False).head(15)[['Product', 'Picture', '收加人数', '收加率%']].copy()
+            raw_fav.insert(0, 'Rank', range(1, len(raw_fav) + 1))
+            
+            # --- 处理类目榜 & 新增【全店总榜】 ---
+            category_sales = df_merged.groupby('一级')['Value'].sum().sort_values(ascending=False)
+            top_3_categories =[cat for cat in category_sales.index if cat != '未分类'][:3]
+            
+            raw_cats = {}
+            for cat in top_3_categories:
+                c_df = df_merged[df_merged['一级'] == cat].copy()
+                c_total = c_df['Value'].sum()
+                c_df['Share% of Category'] = np.where(c_total > 0, c_df['Value'] / c_total, 0)
+                c_top15 = c_df.sort_values(by='Value', ascending=False).head(15)[['Product', 'Picture', 'Value', 'QTY', 'Share% of Category', 'YOY']].copy()
+                c_top15.insert(0, 'Rank', range(1, len(c_top15) + 1))
+                raw_cats[cat] = c_top15
+                
+            # 【新功能】插入不区分类目的"全店总榜"
+            total_cat_df = raw_ttl.copy()
+            total_cat_df.rename(columns={'TTL Rank': 'Rank', 'Share% of TTL': 'Share% of Category'}, inplace=True)
+            raw_cats['全店总榜'] = total_cat_df
+            
+            # 整合到展示列表中，全店总榜排第一
+            display_cat_names = ['全店总榜'] + top_3_categories
+            
+            # --- 退货榜 ---
+            raw_return = df_merged.sort_values(by='Return Value', ascending=False).head(15)[['Product', 'Picture', 'Return Value', 'Return Share%']].copy()
+            raw_return.rename(columns={'Return Value': 'Returned Value', 'Return Share%': 'Share% of TTL'}, inplace=True)
+            raw_return.insert(0, 'HAY Rank', range(1, len(raw_return) + 1))
+    
+            # 生成 Excel
+            excel_data = generate_excel_dashboard(raw_ttl, raw_fav, raw_cats, raw_return, display_cat_names)
+    
+            # --- 页面展示 ---
+            st.success("✅ 数据计算及 Excel 生成完毕！(已完全适配 TOP 15 排版)")
+            st.download_button(label="📥 一键下载无重复版 Excel 报表 (TOP 15)", data=excel_data, file_name="HAY_Ranking_Dashboard_Top15.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+            
+            def fmt_display(df):
+                res = df.copy()
+                for col in res.columns:
+                    if 'Value' in col or 'QTY' in col or '人数' in col:
+                        res[col] = res[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "-")
+                    elif 'Share%' in col or 'YOY' in col or '率' in col:
+                        res[col] = res[col].apply(lambda x: f"{x:.0%}" if pd.notnull(x) else "-")
+                return res.set_index(res.columns[0])
+    
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("🏆 全店销售 Top 15 (TTL Rank)")
+                st.dataframe(fmt_display(raw_ttl), use_container_width=True)
+            with col2:
+                st.subheader("❤️ 收藏加购 Top 15")
+                st.dataframe(fmt_display(raw_fav), use_container_width=True)
+    
+            st.markdown("---")
+            col3, col4 = st.columns(2)
+            with col3:
+                # 现在的类别列表里，第一个就是"全店总榜"
+                st.subheader("📦 各类目及全店总盘 Top 15")
+                tabs = st.tabs([f"{cat} Rank" for cat in display_cat_names])
+                for i, cat in enumerate(display_cat_names):
                     with tabs[i]:
                         st.dataframe(fmt_display(raw_cats[cat]), use_container_width=True)
-        with col4:
-            st.subheader("↩️ 退货 Top 15 (按退款金额)")
-            st.dataframe(fmt_display(raw_return), use_container_width=True)
-
-else:
-    st.info("👈 请在左侧依次上传：1.今年数据 2.去年数据 3.分类映射表")
+            with col4:
+                st.subheader("↩️ 退货 Top 15 (按退款金额)")
+                st.dataframe(fmt_display(raw_return), use_container_width=True)
+    
+    else:
+        st.info("👈 请在左侧依次上传：1.今年数据 2.去年数据 3.分类映射表")
