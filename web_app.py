@@ -156,7 +156,7 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
     st.title("📊 Tmall Store Daily Dashboard")
     st.markdown("💡 **绝对严谨版**：严格提取表格数据，拒绝任何瞎推算，缺失数据优雅画横杠(-)。")
 
-    # --- 侧边栏：业务参数配置中心 (仅在日报模式显示) ---
+    # --- 侧边栏：业务参数配置中心 ---
     with st.sidebar:
         st.header("⚙️ 业务参数配置中心")
         st.info("💡 填好后点击最下方【保存】，下次打开自动恢复！")
@@ -176,7 +176,7 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
         st.subheader("4. 历史对比基数 (LY Actual)")
         ly_whole_gmv = st.number_input("去年全月 GMV", value=config.get('ly_whole_gmv', 2243769.0), step=1000.0)
         ly_whole_net = st.number_input("去年全月 Net", value=config.get('ly_whole_net', 1349223.0), step=1000.0)
-        
+
         st.subheader("5. 每日需更新的累计数据")
         mtd_refund_actual = st.number_input("🔙 本月累计退款 (必填!)", value=config.get('mtd_refund_actual', 369286.84), step=1000.0)
         manual_mtd_gmv = st.number_input("📌 本月累计GMV (防单品误差)", value=config.get('manual_mtd_gmv', 1061347.0), step=1000.0)
@@ -192,7 +192,6 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
             save_config(new_config)
             st.success("配置已永久保存！")
 
-    # --- UI 布局: 上传区 ---
     st.markdown("### 🗂️ 请上传数据源")
     col1, col2, col3 = st.columns(3)
     with col1: 
@@ -207,7 +206,6 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
 
     st.divider()
 
-    # --- 执行生成逻辑 ---
     if st.button("⚡ 严谨生成日报", type="primary", use_container_width=True):
         if not file_order and not file_item and not file_store:
             st.warning("⚠️ 至少需要上传前 3 个文件中的一个！")
@@ -228,8 +226,6 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                 DAYS_PASSED = d.day
                 MONTH_NAME = d.strftime('%b') 
                 WEEK_NUM = d.isocalendar()[1] 
-                
-                # 【新功能】动态计算去年的年份缩写 (例如 2026年 -> 去年就是25, 2025年 -> 去年就是24)
                 ly_year_str = str(d.year - 1)[-2:]
 
                 id_to_cat = {}
@@ -240,7 +236,6 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                     if mapping_df is not None and '商品ID' in mapping_df.columns and '一级' in mapping_df.columns:
                         mapping_df['Clean_ID'] = mapping_df['商品ID'].apply(clean_id)
                         id_to_cat = dict(zip(mapping_df['Clean_ID'], mapping_df['一级']))
-                        st.success(f"🏷️ 成功加载商品主数据映射表！共载入 {len(id_to_cat)} 条精准分类规则。")
 
                 orders = read_excel_smart(file_order, '商品标题')
                 if orders is None: orders = pd.DataFrame()
@@ -316,7 +311,6 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                     'estimated sales of the whole month':[est_whole_month_gmv, est_whole_month_net],
                     f'Monthly target {MONTH_NAME}':[TARGET_GMV_MONTH, TARGET_NET_MONTH],
                     'estimated Achi% of the whole month':[calc_achi(est_whole_month_gmv, TARGET_GMV_MONTH), calc_achi(est_whole_month_net, TARGET_NET_MONTH)],
-                    # 动态植入年份标签，不再写死 Y25
                     f'estimated whole month sales vs Y{ly_year_str} {MONTH_NAME}':[yoy_est_gmv, yoy_est_net] 
                 })
 
@@ -522,7 +516,6 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                 else:
                     bestsellers['Gross_Sales'] = bestsellers['Order_Gross_Sales']
 
-                # 【确保】日报畅销榜也是拉取 TOP 15
                 bestsellers = bestsellers.sort_values('Gross_Sales', ascending=False).head(15).reset_index(drop=True)
                 bestsellers['Contribution%'] = bestsellers['Gross_Sales'] / today_gmv_fallback if today_gmv_fallback > 0 else None
                 bestsellers['No.'] = bestsellers.index + 1
@@ -559,7 +552,6 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                                 col_name = str(df.columns[c_idx])
                                 if pd.isna(val) or val is None or val == '':
                                     worksheet.write(start_row + 2 + r_idx, c_idx, '-', fmt_text) 
-                                # 动态识别年份后缀
                                 elif 'vs Y' in col_name or 'vs LY' in col_name:
                                     worksheet.write(start_row + 2 + r_idx, c_idx, float(val), fmt_pct_int) 
                                 elif 'CR' in metric_name:
@@ -607,19 +599,21 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
             except Exception as e:
                 st.error(f"❌ 程序发生错误: {e}")
 
+
 # =======================================================================================================
-# ========================================== 模块二：月度排行 ==========================================
+# ========================================== 模块二：月度排行 (双核心版) ===============================
 # =======================================================================================================
 elif app_mode == "📅 月度排行 (HAY Ranking)":
     
-    st.title("📊 生意参谋商品数据看板 - HAY Ranking")
+    st.title("📊 生意参谋双年份排行 - HAY Ranking")
+    st.info("💡 只要你把26年和25年的表一起传上来，系统会自动给你抽出【两套独立报表】：一套26年的(带同比)，一套25年的(干干净净无同比)！")
     
     st.sidebar.header("📂 数据上传")
-    file_curr = st.sidebar.file_uploader("1. 上传【今年当月】生意参谋数据", type=["xlsx", "xls", "csv"])
-    file_last = st.sidebar.file_uploader("2. 上传【去年当月】生意参谋数据", type=["xlsx", "xls", "csv"])
+    file_curr = st.sidebar.file_uploader("1. 上传【今年当月】生意参谋数据 (如 2026年)", type=["xlsx", "xls", "csv"])
+    file_last = st.sidebar.file_uploader("2. 上传【去年当月】生意参谋数据 (如 2025年)", type=["xlsx", "xls", "csv"])
     file_map = st.sidebar.file_uploader("3. 上传【分类映射表】", type=["xlsx", "xls", "csv"])
     
-    # --- 数据清洗基础函数 ---
+    # --- 辅助数据清洗 ---
     def load_data(file):
         if file.name.endswith('.csv'):
             try:
@@ -649,8 +643,8 @@ elif app_mode == "📅 月度排行 (HAY Ranking)":
     def to_numeric_col(series):
         cleaned = series.astype(str).str.replace(',', '').str.replace(' ', '')
         return pd.to_numeric(cleaned, errors='coerce').fillna(0)
-    
-    # --- Excel 完美还原排版生成函数 (TOP 15) ---
+        
+    # --- 排版画板 ---
     def generate_excel_dashboard(df_ttl, df_fav, dict_cats, df_return, display_cat_names):
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -661,7 +655,6 @@ elif app_mode == "📅 月度排行 (HAY Ranking)":
             num_fmt = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0'})
             pct_fmt = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '0%'})
             
-            # 为全店总榜和每个类目都生成独立的 Sheet 页
             for cat_name in display_cat_names:
                 sheet_name = f"HAY Ranking - {cat_name}"[:31]
                 worksheet = workbook.add_worksheet(sheet_name)
@@ -685,17 +678,12 @@ elif app_mode == "📅 月度排行 (HAY Ranking)":
                             else:
                                 worksheet.write(start_row + 1 + row_idx, start_col + col_idx, val, fmt)
                 
-                # 左上角：TTL Rank 
                 write_table_to_excel(df_ttl, start_row=2, start_col=0)
-                # 右上角：收藏加购 Rank 
                 write_table_to_excel(df_fav, start_row=2, start_col=8)
                 
-                # 左下角：动态显示该页面的榜单（总榜或某一大类榜）
                 cat_df = dict_cats[cat_name].copy()
                 cat_df.rename(columns={'Rank': f'{cat_name}\nRank', 'Share% of Category': f'Share% of\n{cat_name}'}, inplace=True)
                 write_table_to_excel(cat_df, start_row=21, start_col=0)
-                
-                # 右下角：退货 Rank
                 write_table_to_excel(df_return, start_row=21, start_col=8)
                 
                 worksheet.set_column('A:A', 8)
@@ -708,140 +696,182 @@ elif app_mode == "📅 月度排行 (HAY Ranking)":
                 worksheet.set_column('K:K', 8)
                 worksheet.set_column('L:M', 12)
         return output.getvalue()
-    
-    # ----------------------------
-    
-    if file_curr and file_last and file_map:
-        with st.spinner('正在执行强力去重与精密计算 (TOP 15)...'):
-            
-            df_curr = clean_id(load_data(file_curr))
-            df_last = clean_id(load_data(file_last))
-            df_map = clean_id(load_data(file_map))
-    
-            # --- 强力去重逻辑 ---
-            if '商品名称' in df_curr.columns:
-                df_curr = df_curr.sort_values(by='商品名称', na_position='last').drop_duplicates(subset=['商品ID'], keep='first')
-            else:
-                df_curr = df_curr.drop_duplicates(subset=['商品ID'], keep='first')
-    
+
+    # --- 核心：万能抽取函数 (给它一份数据，它吐出整套 Top15) ---
+    def get_ranking_dfs(df_main_raw, df_last_raw, df_map_raw, is_ly_only=False):
+        df_main = df_main_raw.copy()
+        if '商品名称' in df_main.columns:
+            df_main = df_main.sort_values(by='商品名称', na_position='last').drop_duplicates(subset=['商品ID'], keep='first')
+        else:
+            df_main = df_main.drop_duplicates(subset=['商品ID'], keep='first')
+
+        if '一级' in df_map_raw.columns:
+            df_map_unique = df_map_raw.drop_duplicates(subset=['商品ID'], keep='first')[['商品ID', '一级']]
+        else:
+            df_map_unique = pd.DataFrame(columns=['商品ID', '一级'])
+
+        df_merged = pd.merge(df_main, df_map_unique, on='商品ID', how='left')
+        df_merged['一级'] = df_merged['一级'].fillna('未分类')
+
+        has_yoy = False
+        if not is_ly_only and df_last_raw is not None and not df_last_raw.empty:
+            df_last = df_last_raw.copy()
             if '支付金额' in df_last.columns:
                 df_last['去年支付金额'] = to_numeric_col(df_last['支付金额'])
                 df_last_sales = df_last.groupby('商品ID', as_index=False)['去年支付金额'].sum()
+                df_merged = pd.merge(df_merged, df_last_sales, on='商品ID', how='left')
+                has_yoy = True
+
+        if '去年支付金额' not in df_merged.columns:
+            df_merged['去年支付金额'] = 0.0
+
+        numeric_cols =['支付金额', '去年支付金额', '支付件数', '商品收藏人数', '商品加购人数', '商品访客数', '成功退款金额']
+        for col in numeric_cols:
+            if col in df_merged.columns:
+                df_merged[col] = to_numeric_col(df_merged[col])
             else:
-                df_last_sales = pd.DataFrame(columns=['商品ID', '去年支付金额'])
-    
-            if '一级' in df_map.columns:
-                df_map_unique = df_map.drop_duplicates(subset=['商品ID'], keep='first')[['商品ID', '一级']]
-            else:
-                df_map_unique = pd.DataFrame(columns=['商品ID', '一级'])
-    
-            # --- 合并数据 ---
-            df_merged = pd.merge(df_curr, df_last_sales, on='商品ID', how='left')
-            df_merged = pd.merge(df_merged, df_map_unique, on='商品ID', how='left')
-            df_merged['一级'] = df_merged['一级'].fillna('未分类')
-    
-            # --- 强制转换核心指标 ---
-            numeric_columns =['支付金额', '去年支付金额', '支付件数', '商品收藏人数', '商品加购人数', '商品访客数', '成功退款金额']
-            for col in numeric_columns:
-                if col in df_merged.columns:
-                    df_merged[col] = to_numeric_col(df_merged[col])
-                else:
-                    df_merged[col] = 0.0 
-    
-            # --- 核心指标计算 ---
-            total_store_value = df_merged['支付金额'].sum()
-            total_store_refund = df_merged['成功退款金额'].sum() if df_merged['成功退款金额'].sum() > 0 else 1
-    
-            df_merged['Value'] = df_merged['支付金额']
-            df_merged['QTY'] = df_merged['支付件数']
-            df_merged['Share% of TTL'] = np.where(total_store_value > 0, df_merged['Value'] / total_store_value, 0)
+                df_merged[col] = 0.0
+
+        total_store_value = df_merged['支付金额'].sum()
+        total_store_refund = df_merged['成功退款金额'].sum() if df_merged['成功退款金额'].sum() > 0 else 1
+
+        df_merged['Value'] = df_merged['支付金额']
+        df_merged['QTY'] = df_merged['支付件数']
+        df_merged['Share% of TTL'] = np.where(total_store_value > 0, df_merged['Value'] / total_store_value, 0)
+
+        if has_yoy:
             df_merged['YOY'] = np.where(df_merged['去年支付金额'] > 0, 
                                        (df_merged['Value'] - df_merged['去年支付金额']) / df_merged['去年支付金额'], 
                                        np.nan)
-            df_merged['收加人数'] = df_merged['商品收藏人数'] + df_merged['商品加购人数']
-            df_merged['收加率%'] = np.where(df_merged['商品访客数'] > 0, df_merged['收加人数'] / df_merged['商品访客数'], 0)
-            df_merged['Picture'] = ""
+
+        df_merged['收加人数'] = df_merged['商品收藏人数'] + df_merged['商品加购人数']
+        df_merged['收加率%'] = np.where(df_merged['商品访客数'] > 0, df_merged['收加人数'] / df_merged['商品访客数'], 0)
+        df_merged['Picture'] = ""
+
+        if '商品名称' in df_merged.columns:
+            df_merged['Product'] = df_merged['商品名称'].fillna("未命名_ID:" + df_merged['商品ID'])
+        else:
+            df_merged['Product'] = df_merged['商品ID']
+
+        df_merged['Return Value'] = df_merged['成功退款金额']
+        df_merged['Return Share%'] = df_merged['Return Value'] / total_store_refund
+
+        # ==========================================
+        # 🚀 固定抽 Top 15，按需动态移除 YOY 列
+        # ==========================================
+        ttl_cols = ['Product', 'Picture', 'Value', 'QTY', 'Share% of TTL']
+        cat_cols = ['Product', 'Picture', 'Value', 'QTY', 'Share% of Category']
+        if has_yoy:
+            ttl_cols.append('YOY')
+            cat_cols.append('YOY')
+
+        raw_ttl = df_merged.sort_values(by='Value', ascending=False).head(15)[ttl_cols].copy()
+        raw_ttl.insert(0, 'TTL Rank', range(1, len(raw_ttl) + 1))
+
+        raw_fav = df_merged.sort_values(by='收加人数', ascending=False).head(15)[['Product', 'Picture', '收加人数', '收加率%']].copy()
+        raw_fav.insert(0, 'Rank', range(1, len(raw_fav) + 1))
+
+        category_sales = df_merged.groupby('一级')['Value'].sum().sort_values(ascending=False)
+        top_3_categories = [cat for cat in category_sales.index if cat != '未分类'][:3]
+
+        raw_cats = {}
+        for cat in top_3_categories:
+            c_df = df_merged[df_merged['一级'] == cat].copy()
+            c_total = c_df['Value'].sum()
+            c_df['Share% of Category'] = np.where(c_total > 0, c_df['Value'] / c_total, 0)
+            c_top15 = c_df.sort_values(by='Value', ascending=False).head(15)[cat_cols].copy()
+            c_top15.insert(0, 'Rank', range(1, len(c_top15) + 1))
+            raw_cats[cat] = c_top15
+
+        # 植入全店总榜
+        total_cat_df = raw_ttl.copy()
+        total_cat_df.rename(columns={'TTL Rank': 'Rank', 'Share% of TTL': 'Share% of Category'}, inplace=True)
+        raw_cats['全店总榜'] = total_cat_df
+        display_cat_names = ['全店总榜'] + top_3_categories
+
+        raw_return = df_merged.sort_values(by='Return Value', ascending=False).head(15)[['Product', 'Picture', 'Return Value', 'Return Share%']].copy()
+        raw_return.rename(columns={'Return Value': 'Returned Value', 'Return Share%': 'Share% of TTL'}, inplace=True)
+        raw_return.insert(0, 'HAY Rank', range(1, len(raw_return) + 1))
+
+        return raw_ttl, raw_fav, raw_cats, raw_return, display_cat_names
+
+
+    # --- 统一网页展现函数 ---
+    def render_dashboard_ui(ttl, fav, cats, ret, display_names):
+        def fmt_display(df):
+            res = df.copy()
+            for col in res.columns:
+                if 'Value' in col or 'QTY' in col or '人数' in col:
+                    res[col] = res[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "-")
+                elif 'Share%' in col or 'YOY' in col or '率' in col:
+                    res[col] = res[col].apply(lambda x: f"{x:.0%}" if pd.notnull(x) else "-")
+            return res.set_index(res.columns[0])
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("🏆 全店销售 Top 15 (TTL Rank)")
+            st.dataframe(fmt_display(ttl), use_container_width=True)
+        with col2:
+            st.subheader("❤️ 收藏加购 Top 15")
+            st.dataframe(fmt_display(fav), use_container_width=True)
+        st.markdown("---")
+        col3, col4 = st.columns(2)
+        with col3:
+            st.subheader("📦 各类目及全店总盘 Top 15")
+            tabs = st.tabs([f"{cat} Rank" for cat in display_names])
+            for i, cat in enumerate(display_names):
+                with tabs[i]:
+                    st.dataframe(fmt_display(cats[cat]), use_container_width=True)
+        with col4:
+            st.subheader("↩️ 退货 Top 15 (按退款金额)")
+            st.dataframe(fmt_display(ret), use_container_width=True)
+
+    # ==========================
+    # 执行主逻辑
+    # ==========================
+    if file_curr and file_map:
+        with st.spinner('正在执行强力去重与精密计算 (生成双年份 TOP 15)...'):
             
-            if '商品名称' in df_merged.columns:
-                df_merged['Product'] = df_merged['商品名称'].fillna("未命名_ID:" + df_merged['商品ID'])
-            else:
-                df_merged['Product'] = df_merged['商品ID']
-    
-            df_merged['Return Value'] = df_merged['成功退款金额']
-            df_merged['Return Share%'] = df_merged['Return Value'] / total_store_refund
-    
-            # ==========================================
-            # 🚀 各项排行全部固定抽取前 15 名 (TOP 15) 🚀
-            # ==========================================
+            df_curr_raw = clean_id(load_data(file_curr))
+            df_map_raw = clean_id(load_data(file_map))
             
-            raw_ttl = df_merged.sort_values(by='Value', ascending=False).head(15)[['Product', 'Picture', 'Value', 'QTY', 'Share% of TTL', 'YOY']].copy()
-            raw_ttl.insert(0, 'TTL Rank', range(1, len(raw_ttl) + 1))
-            
-            raw_fav = df_merged.sort_values(by='收加人数', ascending=False).head(15)[['Product', 'Picture', '收加人数', '收加率%']].copy()
-            raw_fav.insert(0, 'Rank', range(1, len(raw_fav) + 1))
-            
-            # --- 处理类目榜 & 新增【全店总榜】 ---
-            category_sales = df_merged.groupby('一级')['Value'].sum().sort_values(ascending=False)
-            top_3_categories =[cat for cat in category_sales.index if cat != '未分类'][:3]
-            
-            raw_cats = {}
-            for cat in top_3_categories:
-                c_df = df_merged[df_merged['一级'] == cat].copy()
-                c_total = c_df['Value'].sum()
-                c_df['Share% of Category'] = np.where(c_total > 0, c_df['Value'] / c_total, 0)
-                c_top15 = c_df.sort_values(by='Value', ascending=False).head(15)[['Product', 'Picture', 'Value', 'QTY', 'Share% of Category', 'YOY']].copy()
-                c_top15.insert(0, 'Rank', range(1, len(c_top15) + 1))
-                raw_cats[cat] = c_top15
+            df_last_raw = None
+            if file_last:
+                df_last_raw = clean_id(load_data(file_last))
                 
-            # 【新功能】插入不区分类目的"全店总榜"
-            total_cat_df = raw_ttl.copy()
-            total_cat_df.rename(columns={'TTL Rank': 'Rank', 'Share% of TTL': 'Share% of Category'}, inplace=True)
-            raw_cats['全店总榜'] = total_cat_df
+            # 1️⃣ 计算【今年 (比如2026)】的数据看板 (有去年的参照，带YOY)
+            curr_ttl, curr_fav, curr_cats, curr_ret, curr_names = get_ranking_dfs(df_curr_raw, df_last_raw, df_map_raw, is_ly_only=False)
+            excel_curr = generate_excel_dashboard(curr_ttl, curr_fav, curr_cats, curr_ret, curr_names)
             
-            # 整合到展示列表中，全店总榜排第一
-            display_cat_names = ['全店总榜'] + top_3_categories
-            
-            # --- 退货榜 ---
-            raw_return = df_merged.sort_values(by='Return Value', ascending=False).head(15)[['Product', 'Picture', 'Return Value', 'Return Share%']].copy()
-            raw_return.rename(columns={'Return Value': 'Returned Value', 'Return Share%': 'Share% of TTL'}, inplace=True)
-            raw_return.insert(0, 'HAY Rank', range(1, len(raw_return) + 1))
-    
-            # 生成 Excel
-            excel_data = generate_excel_dashboard(raw_ttl, raw_fav, raw_cats, raw_return, display_cat_names)
-    
-            # --- 页面展示 ---
-            st.success("✅ 数据计算及 Excel 生成完毕！(已完全适配 TOP 15 排版)")
-            st.download_button(label="📥 一键下载无重复版 Excel 报表 (TOP 15)", data=excel_data, file_name="HAY_Ranking_Dashboard_Top15.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-            
-            def fmt_display(df):
-                res = df.copy()
-                for col in res.columns:
-                    if 'Value' in col or 'QTY' in col or '人数' in col:
-                        res[col] = res[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "-")
-                    elif 'Share%' in col or 'YOY' in col or '率' in col:
-                        res[col] = res[col].apply(lambda x: f"{x:.0%}" if pd.notnull(x) else "-")
-                return res.set_index(res.columns[0])
-    
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("🏆 全店销售 Top 15 (TTL Rank)")
-                st.dataframe(fmt_display(raw_ttl), use_container_width=True)
-            with col2:
-                st.subheader("❤️ 收藏加购 Top 15")
-                st.dataframe(fmt_display(raw_fav), use_container_width=True)
-    
-            st.markdown("---")
-            col3, col4 = st.columns(2)
-            with col3:
-                # 现在的类别列表里，第一个就是"全店总榜"
-                st.subheader("📦 各类目及全店总盘 Top 15")
-                tabs = st.tabs([f"{cat} Rank" for cat in display_cat_names])
-                for i, cat in enumerate(display_cat_names):
-                    with tabs[i]:
-                        st.dataframe(fmt_display(raw_cats[cat]), use_container_width=True)
-            with col4:
-                st.subheader("↩️ 退货 Top 15 (按退款金额)")
-                st.dataframe(fmt_display(raw_return), use_container_width=True)
-    
+            # 2️⃣ 如果传了去年文件，系统顺手计算【去年 (比如2025)】的独立看板 (无参照，不带YOY)
+            if df_last_raw is not None:
+                ly_ttl, ly_fav, ly_cats, ly_ret, ly_names = get_ranking_dfs(df_last_raw, None, df_map_raw, is_ly_only=True)
+                excel_ly = generate_excel_dashboard(ly_ttl, ly_fav, ly_cats, ly_ret, ly_names)
+
+            # --- 显示界面 ---
+            if df_last_raw is not None:
+                st.success("✅ 双年份数据处理完成！已为你独立生成两份报表。")
+                
+                # 顶端双下载按钮
+                dl_col1, dl_col2 = st.columns(2)
+                with dl_col1:
+                    st.download_button(label="📥 下载【今年当月】榜单 Excel (含YOY)", data=excel_curr, file_name="HAY_Ranking_CurrentYear.xlsx", type="primary")
+                with dl_col2:
+                    st.download_button(label="📥 下载【去年当月】独立榜单 Excel (无YOY)", data=excel_ly, file_name="HAY_Ranking_LastYear.xlsx")
+                    
+                # 网页展示用双标签切分
+                tab_curr, tab_ly = st.tabs(["🔥 1. 今年当月排行 (对比去年，含YOY)", "⏪ 2. 去年当月排行 (仅抽Top15，无YOY)"])
+                with tab_curr:
+                    render_dashboard_ui(curr_ttl, curr_fav, curr_cats, curr_ret, curr_names)
+                with tab_ly:
+                    st.info("💡 这里的排名是用你去年的表格，独立跑出的一套 Top 15 总榜和细分榜。")
+                    render_dashboard_ui(ly_ttl, ly_fav, ly_cats, ly_ret, ly_names)
+                    
+            else:
+                # 只传了今年，没传去年
+                st.success("✅ 单年份数据处理完成！(由于没有上传去年表格，已自动屏蔽YOY列)")
+                st.download_button(label="📥 下载独立榜单 Excel (无YOY)", data=excel_curr, file_name="HAY_Ranking.xlsx", type="primary")
+                render_dashboard_ui(curr_ttl, curr_fav, curr_cats, curr_ret, curr_names)
+
     else:
         st.info("👈 请在左侧依次上传：1.今年数据 2.去年数据 3.分类映射表")
