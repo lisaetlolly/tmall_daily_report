@@ -145,7 +145,7 @@ def calc_achi(actual, target):
 # 侧边栏：顶级导航菜单
 # ==========================================
 st.sidebar.title("🧭 导航菜单")
-app_mode = st.sidebar.radio("请选择功能模块：", ["🌞 每日看板 (Daily Dashboard)", "📅 月度排行 (HAY Ranking)"])
+app_mode = st.sidebar.radio("请选择功能模块：",["🌞 每日看板 (Daily Dashboard)", "📅 月度排行 (HAY Ranking)"])
 st.sidebar.markdown("---")
 
 # =======================================================================================================
@@ -516,6 +516,7 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
                 else:
                     bestsellers['Gross_Sales'] = bestsellers['Order_Gross_Sales']
 
+                # 日报畅销榜 TOP 15
                 bestsellers = bestsellers.sort_values('Gross_Sales', ascending=False).head(15).reset_index(drop=True)
                 bestsellers['Contribution%'] = bestsellers['Gross_Sales'] / today_gmv_fallback if today_gmv_fallback > 0 else None
                 bestsellers['No.'] = bestsellers.index + 1
@@ -601,7 +602,7 @@ if app_mode == "🌞 每日看板 (Daily Dashboard)":
 
 
 # =======================================================================================================
-# ========================================== 模块二：月度排行 (双核心版) ===============================
+# ========================================== 模块二：月度排行 (双年份分身版) ===========================
 # =======================================================================================================
 elif app_mode == "📅 月度排行 (HAY Ranking)":
     
@@ -609,8 +610,8 @@ elif app_mode == "📅 月度排行 (HAY Ranking)":
     st.info("💡 只要你把26年和25年的表一起传上来，系统会自动给你抽出【两套独立报表】：一套26年的(带同比)，一套25年的(干干净净无同比)！")
     
     st.sidebar.header("📂 数据上传")
-    file_curr = st.sidebar.file_uploader("1. 上传【今年当月】生意参谋数据 (如 2026年)", type=["xlsx", "xls", "csv"])
-    file_last = st.sidebar.file_uploader("2. 上传【去年当月】生意参谋数据 (如 2025年)", type=["xlsx", "xls", "csv"])
+    file_curr = st.sidebar.file_uploader("1. 上传【今年当月】数据 (如 2026年)", type=["xlsx", "xls", "csv"])
+    file_last = st.sidebar.file_uploader("2. 上传【去年当月】数据 (如 2025年)", type=["xlsx", "xls", "csv"])
     file_map = st.sidebar.file_uploader("3. 上传【分类映射表】", type=["xlsx", "xls", "csv"])
     
     # --- 辅助数据清洗 ---
@@ -759,8 +760,8 @@ elif app_mode == "📅 月度排行 (HAY Ranking)":
         # ==========================================
         # 🚀 固定抽 Top 15，按需动态移除 YOY 列
         # ==========================================
-        ttl_cols = ['Product', 'Picture', 'Value', 'QTY', 'Share% of TTL']
-        cat_cols = ['Product', 'Picture', 'Value', 'QTY', 'Share% of Category']
+        ttl_cols =['Product', 'Picture', 'Value', 'QTY', 'Share% of TTL']
+        cat_cols =['Product', 'Picture', 'Value', 'QTY', 'Share% of Category']
         if has_yoy:
             ttl_cols.append('YOY')
             cat_cols.append('YOY')
@@ -772,7 +773,7 @@ elif app_mode == "📅 月度排行 (HAY Ranking)":
         raw_fav.insert(0, 'Rank', range(1, len(raw_fav) + 1))
 
         category_sales = df_merged.groupby('一级')['Value'].sum().sort_values(ascending=False)
-        top_3_categories = [cat for cat in category_sales.index if cat != '未分类'][:3]
+        top_3_categories =[cat for cat in category_sales.index if cat != '未分类'][:3]
 
         raw_cats = {}
         for cat in top_3_categories:
@@ -855,21 +856,26 @@ elif app_mode == "📅 月度排行 (HAY Ranking)":
                 # 顶端双下载按钮
                 dl_col1, dl_col2 = st.columns(2)
                 with dl_col1:
-                    st.download_button(label="📥 下载【今年当月】榜单 Excel (含YOY)", data=excel_curr, file_name="HAY_Ranking_CurrentYear.xlsx", type="primary")
+                    st.download_button(label="📥 1. 下载【今年】榜单 Excel (含YOY)", data=excel_curr, file_name="HAY_Ranking_CurrentYear.xlsx", type="primary")
                 with dl_col2:
-                    st.download_button(label="📥 下载【去年当月】独立榜单 Excel (无YOY)", data=excel_ly, file_name="HAY_Ranking_LastYear.xlsx")
+                    st.download_button(label="📥 2. 下载【去年】独立榜单 Excel (无YOY)", data=excel_ly, file_name="HAY_Ranking_LastYear.xlsx", type="primary")
                     
-                # 网页展示用双标签切分
-                tab_curr, tab_ly = st.tabs(["🔥 1. 今年当月排行 (对比去年，含YOY)", "⏪ 2. 去年当月排行 (仅抽Top15，无YOY)"])
-                with tab_curr:
+                st.markdown("---")
+                
+                # 💡【核心修复区】把会导致系统静默崩溃的"标签页(Tabs)"改成了"单选按钮(Radio)"
+                view_mode = st.radio("👀 请点击切换要在网页下方预览的年份榜单：",["🔥 预览【今年当月】排行 (对比去年，含YOY)", "⏪ 预览【去年当月】独立排行 (无YOY)"], horizontal=True)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                if view_mode == "🔥 预览【今年当月】排行 (对比去年，含YOY)":
                     render_dashboard_ui(curr_ttl, curr_fav, curr_cats, curr_ret, curr_names)
-                with tab_ly:
-                    st.info("💡 这里的排名是用你去年的表格，独立跑出的一套 Top 15 总榜和细分榜。")
+                else:
+                    st.info("💡 下方为去年独立的 Top 15 榜单 (已自动为您隐藏所有 YOY 列)")
                     render_dashboard_ui(ly_ttl, ly_fav, ly_cats, ly_ret, ly_names)
                     
             else:
                 # 只传了今年，没传去年
-                st.success("✅ 单年份数据处理完成！(由于没有上传去年表格，已自动屏蔽YOY列)")
+                st.success("✅ 单年份数据处理完成！(由于没有上传去年表格，已自动为您屏蔽 YOY 列)")
                 st.download_button(label="📥 下载独立榜单 Excel (无YOY)", data=excel_curr, file_name="HAY_Ranking.xlsx", type="primary")
                 render_dashboard_ui(curr_ttl, curr_fav, curr_cats, curr_ret, curr_names)
 
