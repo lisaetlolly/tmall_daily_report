@@ -45,6 +45,30 @@ def to_numeric_col(series):
     cleaned = series.astype(str).str.replace(',', '').str.replace(' ', '')
     return pd.to_numeric(cleaned, errors='coerce').fillna(0)
 
+def dedupe_by_product_id(df):
+    """按商品ID聚合一行：金额/件数/人数类求和；商品名称取一条（先按名称排序，结果稳定）。"""
+    if df is None or df.empty or '商品ID' not in df.columns:
+        return df
+    d = df.copy()
+    d['商品ID'] = d['商品ID'].astype(str).str.strip()
+    d = d[d['商品ID'].ne('') & d['商品ID'].str.lower().ne('nan')]
+    sum_cols = ['支付金额', '支付件数', '商品收藏人数', '商品加购人数', '商品访客数', '成功退款金额']
+    sum_cols = [c for c in sum_cols if c in d.columns]
+    for c in sum_cols:
+        d[c] = to_numeric_col(d[c])
+    if '商品名称' in d.columns:
+        d = d.sort_values(by='商品名称', na_position='last')
+    agg_dict = {c: 'sum' for c in sum_cols}
+    if '商品名称' in d.columns:
+        agg_dict['商品名称'] = 'first'
+    for c in d.columns:
+        if c == '商品ID' or c in agg_dict:
+            continue
+        agg_dict[c] = 'first'
+    if not agg_dict:
+        return d.drop_duplicates(subset=['商品ID'], keep='first').reset_index(drop=True)
+    return d.groupby('商品ID', as_index=False, sort=False).agg(agg_dict)
+
 def normalize_category(raw: str) -> str:
     """
     将映射表里的一级类目做口径统一：
@@ -154,18 +178,23 @@ if file_curr and file_last and file_map:
         
         # 数据读取与合并
         df_curr = clean_id(load_data(file_curr))
+        df_curr = dedupe_by_product_id(df_curr)
         df_last = clean_id(load_data(file_last))
         df_map = clean_id(load_data(file_map))
 
         if '支付金额' in df_last.columns:
-            df_last_sales = df_last[['商品ID', '支付金额']].rename(columns={'支付金额': '去年支付金额'})
+            df_last['支付金额'] = to_numeric_col(df_last['支付金额'])
+            df_last_sales = df_last.groupby('商品ID', as_index=False)['支付金额'].sum().rename(
+                columns={'支付金额': '去年支付金额'}
+            )
         else:
             df_last_sales = pd.DataFrame(columns=['商品ID', '去年支付金额'])
 
         df_merged = pd.merge(df_curr, df_last_sales, on='商品ID', how='left')
         
         if '一级' in df_map.columns:
-            df_merged = pd.merge(df_merged, df_map[['商品ID', '一级']], on='商品ID', how='left')
+            df_map_cat = df_map[['商品ID', '一级']].drop_duplicates(subset=['商品ID'], keep='first')
+            df_merged = pd.merge(df_merged, df_map_cat, on='商品ID', how='left')
         else:
             df_merged['一级'] = '未分类'
         df_merged['一级'] = df_merged['一级'].fillna('未分类')
