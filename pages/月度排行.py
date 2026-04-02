@@ -46,7 +46,7 @@ def to_numeric_col(series):
     return pd.to_numeric(cleaned, errors='coerce').fillna(0)
 
 # --- Excel 完美还原排版生成函数 ---
-def generate_excel_dashboard(df_ttl, df_fav, dict_cats, df_return, cat_names):
+def generate_excel_dashboard(df_ttl, dict_cats, dict_cats_fav, dict_cats_return, cat_names):
     output = io.BytesIO()
     # 使用 xlsxwriter 引擎进行精细化排版
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -94,16 +94,20 @@ def generate_excel_dashboard(df_ttl, df_fav, dict_cats, df_return, cat_names):
             # 1. 左上：全店 TTL Rank
             write_table_to_excel(df_ttl, start_row=2, start_col=0) # 从 A3 开始
             
-            # 2. 右上：收藏加购 Rank
-            write_table_to_excel(df_fav, start_row=2, start_col=8) # 从 I3 开始
+            # 2. 右上：该类目 收加 Rank
+            cat_fav_df = dict_cats_fav[cat_name].copy()
+            cat_fav_df.rename(columns={'Rank': f'{cat_name}\nRank'}, inplace=True)
+            write_table_to_excel(cat_fav_df, start_row=2, start_col=8) # 从 I3 开始
             
             # 3. 左下：类目 Rank (动态替换列名以匹配图片)
             cat_df = dict_cats[cat_name].copy()
             cat_df.rename(columns={'Rank': f'{cat_name}\nRank', 'Share% of Category': f'Share% of\n{cat_name}'}, inplace=True)
             write_table_to_excel(cat_df, start_row=16, start_col=0) # 从 A17 开始
             
-            # 4. 右下：退款 Rank
-            write_table_to_excel(df_return, start_row=16, start_col=8) # 从 I17 开始
+            # 4. 右下：该类目 退款 Rank
+            cat_return_df = dict_cats_return[cat_name].copy()
+            cat_return_df.rename(columns={'Rank': f'{cat_name}\nRank', 'Share% of Category': f'Share% of\n{cat_name}'}, inplace=True)
+            write_table_to_excel(cat_return_df, start_row=16, start_col=8) # 从 I17 开始
             
             # --- 调整列宽让排版更美观 ---
             worksheet.set_column('A:A', 8)   # Rank
@@ -179,6 +183,8 @@ if file_curr and file_last and file_map:
         top_3_categories = [cat for cat in category_sales.index if cat != '未分类'][:3]
         
         raw_cats = {}
+        raw_cats_fav = {}
+        raw_cats_return = {}
         for cat in top_3_categories:
             c_df = df_merged[df_merged['一级'] == cat].copy()
             c_total = c_df['Value'].sum()
@@ -186,6 +192,18 @@ if file_curr and file_last and file_map:
             c_top10 = c_df.sort_values(by='Value', ascending=False).head(10)[['Product', 'Picture', 'Value', 'QTY', 'Share% of Category', 'YOY']].copy()
             c_top10.insert(0, 'Rank', range(1, len(c_top10) + 1))
             raw_cats[cat] = c_top10
+
+            # 分类口径：收加 Top10（按收加人数）
+            c_fav_top10 = c_df.sort_values(by='收加人数', ascending=False).head(10)[['Product', 'Picture', '收加人数', '收加率%']].copy()
+            c_fav_top10.insert(0, 'Rank', range(1, len(c_fav_top10) + 1))
+            raw_cats_fav[cat] = c_fav_top10
+
+            # 分类口径：退款 Top10（按退款金额）
+            c_refund_total = c_df['Return Value'].sum()
+            c_df['Share% of Category'] = np.where(c_refund_total > 0, c_df['Return Value'] / c_refund_total, 0)
+            c_return_top10 = c_df.sort_values(by='Return Value', ascending=False).head(10)[['Product', 'Picture', 'Return Value', 'Share% of Category']].copy()
+            c_return_top10.insert(0, 'Rank', range(1, len(c_return_top10) + 1))
+            raw_cats_return[cat] = c_return_top10
             
         # 4. Return
         raw_return = df_merged.sort_values(by='Return Value', ascending=False).head(10)[['Product', 'Picture', 'Return Value', 'Return Share%']].copy()
@@ -193,7 +211,7 @@ if file_curr and file_last and file_map:
         raw_return.insert(0, 'HAY Rank', range(1, len(raw_return) + 1))
 
         # 🚀 触发 Excel 生成
-        excel_data = generate_excel_dashboard(raw_ttl, raw_fav, raw_cats, raw_return, top_3_categories)
+        excel_data = generate_excel_dashboard(raw_ttl, raw_cats, raw_cats_fav, raw_cats_return, top_3_categories)
 
         # ---------------- 页面展示 ----------------
         
@@ -230,15 +248,24 @@ if file_curr and file_last and file_map:
         st.markdown("---")
         col3, col4 = st.columns(2)
         with col3:
-            st.subheader("📦 三大核心类目 Top 10")
+            st.subheader("📦 三大核心类目 Top 10（销量 / 收加）")
             if len(top_3_categories) > 0:
                 tabs = st.tabs([f"{cat} Rank" for cat in top_3_categories])
                 for i, cat in enumerate(top_3_categories):
                     with tabs[i]:
                         st.dataframe(fmt_display(raw_cats[cat]), use_container_width=True)
+                        st.markdown("**该类目收加 Top 10**")
+                        st.dataframe(fmt_display(raw_cats_fav[cat]), use_container_width=True)
         with col4:
             st.subheader("↩️ 退货 Top 10 (按退款金额)")
             st.dataframe(fmt_display(raw_return), use_container_width=True)
+            st.markdown("---")
+            st.subheader("↩️ 各分类退货 Top 10（按退款金额）")
+            if len(top_3_categories) > 0:
+                tabs_return = st.tabs([f"{cat} Return" for cat in top_3_categories])
+                for i, cat in enumerate(top_3_categories):
+                    with tabs_return[i]:
+                        st.dataframe(fmt_display(raw_cats_return[cat]), use_container_width=True)
 
 else:
     st.info("👈 请在左侧依次上传：1.今年当月数据 2.去年当月数据 3.分类映射表")
