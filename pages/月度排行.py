@@ -45,6 +45,31 @@ def to_numeric_col(series):
     cleaned = series.astype(str).str.replace(',', '').str.replace(' ', '')
     return pd.to_numeric(cleaned, errors='coerce').fillna(0)
 
+def normalize_category(raw: str) -> str:
+    """
+    将映射表里的一级类目做口径统一：
+    - 配件 / 配饰 合并为：配件配饰
+    - 灯具同义词（灯/照明/light/lighting/lamp）统一为：灯具
+    - 家具同义词（家具/furniture）统一为：家具
+    """
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return '未分类'
+    s = str(raw).strip()
+    if s == '' or s.lower() in {'nan', 'none', 'null'}:
+        return '未分类'
+
+    s_no_space = s.replace(' ', '')
+    s_low = s.lower()
+
+    if ('配件' in s_no_space) or ('配饰' in s_no_space):
+        return '配件配饰'
+    if ('灯' in s_no_space) or ('照明' in s_no_space) or ('light' in s_low) or ('lamp' in s_low) or ('lighting' in s_low):
+        return '灯具'
+    if ('家具' in s_no_space) or ('furniture' in s_low):
+        return '家具'
+
+    return s
+
 # --- Excel 完美还原排版生成函数 ---
 def generate_excel_dashboard(df_ttl, dict_cats, dict_cats_fav, dict_cats_return, cat_names):
     output = io.BytesIO()
@@ -144,6 +169,7 @@ if file_curr and file_last and file_map:
         else:
             df_merged['一级'] = '未分类'
         df_merged['一级'] = df_merged['一级'].fillna('未分类')
+        df_merged['一级'] = df_merged['一级'].apply(normalize_category)
 
         numeric_columns =['支付金额', '去年支付金额', '支付件数', '商品收藏人数', '商品加购人数', '商品访客数', '成功退款金额']
         for col in numeric_columns:
@@ -180,13 +206,24 @@ if file_curr and file_last and file_map:
         
         # 3. Category (存入字典)
         category_sales = df_merged.groupby('一级')['Value'].sum().sort_values(ascending=False)
-        top_3_categories = [cat for cat in category_sales.index if cat != '未分类'][:3]
+        preferred_categories = ['家具', '灯具', '配件配饰']
+        existing_cats = [c for c in preferred_categories if c in category_sales.index and c != '未分类']
+        if len(existing_cats) > 0:
+            top_3_categories = existing_cats
+        else:
+            top_3_categories = [cat for cat in category_sales.index if cat != '未分类'][:3]
         
         raw_cats = {}
         raw_cats_fav = {}
         raw_cats_return = {}
         for cat in top_3_categories:
             c_df = df_merged[df_merged['一级'] == cat].copy()
+            if len(c_df) == 0:
+                raw_cats[cat] = pd.DataFrame(columns=['Rank', 'Product', 'Picture', 'Value', 'QTY', 'Share% of Category', 'YOY'])
+                raw_cats_fav[cat] = pd.DataFrame(columns=['Rank', 'Product', 'Picture', '收加人数', '收加率%'])
+                raw_cats_return[cat] = pd.DataFrame(columns=['Rank', 'Product', 'Picture', 'Return Value', 'Share% of Category'])
+                continue
+
             c_total = c_df['Value'].sum()
             c_df['Share% of Category'] = np.where(c_total > 0, c_df['Value'] / c_total, 0)
             c_top10 = c_df.sort_values(by='Value', ascending=False).head(10)[['Product', 'Picture', 'Value', 'QTY', 'Share% of Category', 'YOY']].copy()
